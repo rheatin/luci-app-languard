@@ -36,6 +36,7 @@ var callIpList = rpc.declare({
 var callSync = rpc.declare({ object: 'luci.languard', method: 'sync' });
 var callAppList = rpc.declare({ object: 'luci.languard', method: 'applist' });
 var callAppStats = rpc.declare({ object: 'luci.languard', method: 'appstats' });
+var callBlockAudit = rpc.declare({ object: 'luci.languard', method: 'blockaudit', params: [ 'limit' ] });
 var callAppImport = rpc.declare({ object: 'luci.languard', method: 'appimport', params: ['text'] });
 var callAppDel = rpc.declare({ object: 'luci.languard', method: 'appdel', params: ['id'] });
 var callSigList = rpc.declare({ object: 'luci.languard', method: 'siglist', params: ['name'] });
@@ -2062,6 +2063,24 @@ return view.extend({
 
 	refreshLogs: function () {
 		var self = this;
+		callBlockAudit('100').then(function (r) {
+			var tb = document.getElementById('cb-audit-tbody');
+			if (!tb) return;
+			while (tb.firstChild) tb.removeChild(tb.firstChild);
+			var evs = (r && r.events) || [];
+			if (!evs.length) {
+				tb.appendChild(E('tr', {}, E('td', { 'colspan': 4, 'class': 'cb-empty' },
+					_('Nothing has been blocked yet'))));
+			}
+			evs.forEach(function (e) {
+				tb.appendChild(E('tr', {}, [
+					E('td', { 'class': 'cb-mono', 'style': 'font-size:.75rem' }, e.ts || ''),
+					E('td', {}, e.kind || ''),
+					E('td', { 'class': 'cb-mono cb-hide-sm', 'style': 'font-size:.75rem' }, e.mac || '-'),
+					E('td', { 'class': 'cb-hide-sm', 'style': 'opacity:.8' }, e.note || '')
+				]));
+			});
+		}).catch(function () {});
 		return callLogList('500').then(function (res) {
 			var next = (res && res.entries) || [];
 			var prev = self.logs || [];
@@ -3324,6 +3343,26 @@ E('div', { 'class': 'cb-card' }, [
 		}, [
 			E('p', { 'style': 'opacity:.75;margin:.25rem 0 1rem' },
 				_('Every successful and failed login through SSH or LuCI, newest first. Kept in memory-backed storage, capped at 500 entries.')),
+			E('div', { 'class': 'cb-card', 'style': 'margin-bottom:1rem' }, [
+				E('div', { 'class': 'cb-card-head' }, [
+					E('span', { 'class': 'cb-dot' }), E('span', {}, _('Block and unblock history')),
+					E('span', { 'class': 'cb-count', 'style': 'margin-left:auto' },
+						_('who blocked what, and when'))
+				]),
+				E('div', { 'class': 'cb-card-body' }, [
+					E('div', { 'class': 'cb-tablewrap' }, [
+						E('table', { 'class': 'cb-table' }, [
+							E('thead', {}, E('tr', {}, [
+								E('th', {}, _('Time')),
+								E('th', {}, _('Action')),
+								E('th', { 'class': 'cb-hide-sm' }, _('Device')),
+								E('th', { 'class': 'cb-hide-sm' }, _('Reason'))
+							])),
+							E('tbody', { 'id': 'cb-audit-tbody' })
+						])
+					])
+				])
+			]),
 			E('div', { 'class': 'cb-log-filters' }, [
 				E('input', {
 					'type': 'text',
