@@ -1696,13 +1696,13 @@ local function collect_app_stats(now)
 		st.hist = st.hist or {}
 		if st.day and st.day ~= "" and st.apps then
 			st.hist[st.day] = { apps = st.apps, dev = st.dev, low = st.low,
-			                    proxy = st.proxy }
+			                    proxy = st.proxy, node = st.node, ph = st.ph }
 		end
 		local days = {}
 		for d in pairs(st.hist) do days[#days + 1] = d end
 		table.sort(days)
 		for i = 1, #days - 7 do st.hist[days[i]] = nil end
-		st.day, st.apps, st.dev, st.low, st.proxy = today, {}, {}, nil, {}
+		st.day, st.apps, st.dev, st.low, st.proxy, st.node, st.ph = today, {}, {}, nil, {}, {}, {}
 	end
 
 	-- one line per flow: json was 492 KB and cost more to parse than the
@@ -1759,6 +1759,20 @@ local function collect_app_stats(now)
 						st.proxy = st.proxy or {}
 						local g = fc.c or fc.o
 						st.proxy[g] = (st.proxy[g] or 0) + delta
+						st.node = st.node or {}
+						st.node[fc.o] = (st.node[fc.o] or 0) + delta
+						-- which names actually went out that way, so a group
+						-- can be traced back to the addresses behind it
+						if host then
+							st.ph = st.ph or {}
+							local e = st.ph[host]
+							if not e then
+								if #st.ph > 4000 then st.ph = {} end
+								e = { n = fc.o, g = g }
+								st.ph[host] = e
+							end
+							e.b = (e.b or 0) + delta
+						end
 					end
 					local app, conf = classify_flow(apps, proto, remote_port, remote_ip, host)
 					if app and conf == "high" then
@@ -1824,9 +1838,15 @@ function methods.appstats(range)
 	else
 		buckets[#buckets + 1] = st
 	end
-	local apps, dev, low, prox = {}, {}, {}, {}
+	local apps, dev, low, prox, nodes, ph = {}, {}, {}, {}, {}, {}
 	for _, b in ipairs(buckets) do
 		for k, v in pairs(b.proxy or {}) do prox[k] = (prox[k] or 0) + v end
+		for k, v in pairs(b.node or {}) do nodes[k] = (nodes[k] or 0) + v end
+		for k, v in pairs(b.ph or {}) do
+			local e = ph[k]
+			if not e then e = { n = v.n, g = v.g, b = 0 }; ph[k] = e end
+			e.b = e.b + (v.b or 0)
+		end
 		for k, v in pairs(b.apps or {}) do apps[k] = (apps[k] or 0) + v end
 		for k, v in pairs(b.low or {}) do low[k] = (low[k] or 0) + v end
 		for ip, m in pairs(b.dev or {}) do
@@ -1877,9 +1897,20 @@ function methods.appstats(range)
 	end
 	table.sort(plist, function(a, b) return a.bytes > b.bytes end)
 
+	local nlist = {}
+	for k, bytes in pairs(nodes) do nlist[#nlist + 1] = { node = k, bytes = bytes } end
+	table.sort(nlist, function(a, b) return a.bytes > b.bytes end)
+
+	local hlist = {}
+	for host, e in pairs(ph) do
+		hlist[#hlist + 1] = { host = host, bytes = e.b or 0, node = e.n, group = e.g }
+	end
+	table.sort(hlist, function(a, b) return a.bytes > b.bytes end)
+	while #hlist > 60 do table.remove(hlist) end
+
 	return { success = true, running = true, day = st.day or "", range = range or "today",
 	         apps = names, dev = devs, per_app = per_app,
-	         proxy = plist, proxy_total = ptotal }
+	         proxy = plist, proxy_total = ptotal, nodes = nlist, hosts = hlist }
 end
 
 function methods.appreset()

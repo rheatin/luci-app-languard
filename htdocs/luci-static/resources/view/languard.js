@@ -1206,6 +1206,28 @@ return view.extend({
 			});
 		}
 
+		var ntb = document.getElementById('cb-node-tbody');
+		if (ntb) {
+			while (ntb.firstChild) ntb.removeChild(ntb.firstChild);
+			((this.appStats && this.appStats.nodes) || []).forEach(function (x) {
+				ntb.appendChild(E('tr', {}, [
+					E('td', {}, x.node),
+					E('td', { 'style': 'text-align:right' }, fmtBytes(x.bytes))
+				]));
+			});
+		}
+		var htb = document.getElementById('cb-host-tbody');
+		if (htb) {
+			while (htb.firstChild) htb.removeChild(htb.firstChild);
+			((this.appStats && this.appStats.hosts) || []).slice(0, 25).forEach(function (x) {
+				htb.appendChild(E('tr', {}, [
+					E('td', { 'class': 'cb-mono', 'style': 'font-size:.78rem' }, x.host || '(ip)'),
+					E('td', { 'class': 'cb-hide-sm', 'style': 'font-size:.75rem;opacity:.7' }, x.node || ''),
+					E('td', { 'style': 'text-align:right' }, fmtBytes(x.bytes))
+				]));
+			});
+		}
+
 		var tbody = document.getElementById('cb-app-tbody');
 		if (!tbody) return;
 		while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
@@ -3148,6 +3170,18 @@ E('div', { 'class': 'cb-card' }, [
 								E('th', { 'style': 'text-align:right' }, _('Traffic'))
 							])),
 							E('tbody', { 'id': 'cb-proxy-tbody' })
+						])
+					]),
+					E('div', { 'style': 'margin-top:.9rem;font-size:.78rem;opacity:.65' }, _('Node')),
+					E('div', { 'class': 'cb-tablewrap' }, [
+						E('table', { 'class': 'cb-table' }, [
+							E('tbody', { 'id': 'cb-node-tbody' })
+						])
+					]),
+					E('div', { 'style': 'margin-top:.9rem;font-size:.78rem;opacity:.65' }, _('Domains sent through it')),
+					E('div', { 'class': 'cb-tablewrap' }, [
+						E('table', { 'class': 'cb-table' }, [
+							E('tbody', { 'id': 'cb-host-tbody' })
 						])
 					]),
 					E('div', { 'style': 'margin-top:.5rem;font-size:.78rem;opacity:.65' },
