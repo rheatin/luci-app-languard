@@ -4692,6 +4692,23 @@ end
 -- Health probe. Covers the two failures actually seen in the field: a watcher
 -- that is alive but no longer reads the log, and saved state that never made
 -- it into the kernel.
+-- 自检项里能自动处理的那些,一键修复。restart 必须脱离父进程,
+-- 否则重启服务时这个 ubus 调用也会跟着断。
+function methods.fix(id)
+	id = tostring(id or "")
+	if id == "watcher" or id == "appstats" or id == "logread" then
+		sys.call("( /etc/init.d/languard restart ) >/dev/null 2>&1 &")
+		return ok({ action = "restart", id = id })
+	elseif id == "luci_realip" then
+		sys.call("( /usr/libexec/languard-luci-realip >/dev/null 2>&1; /etc/init.d/uhttpd restart ) >/dev/null 2>&1 &")
+		return ok({ action = "realip" })
+	elseif id == "nftset" or id == "rulesfile" or id == "nfthook" then
+		methods.sync()
+		return ok({ action = "sync", id = id })
+	end
+	return err("no automatic fix for " .. id)
+end
+
 function methods.selfcheck()
 	local checks = {}
 	local function add(id, ok, detail, hint)
@@ -4969,6 +4986,7 @@ if arg[1] == "list" then
 		wladd       = { mac = "" },
 		wldel       = { mac = "" },
 		blockaudit  = { limit = "" },
+		fix         = { id = "" },
 		panicstate  = {},
 		panic       = { on_ = "" },
 		trend       = {},
@@ -5160,6 +5178,8 @@ elseif arg[1] == "call" then
 		res = methods.wladd(req.mac)
 	elseif name == "wldel" then
 		res = methods.wldel(req.mac)
+	elseif name == "fix" then
+		res = methods.fix(req.id)
 	elseif name == "blockaudit" then
 		res = methods.blockaudit(req.limit)
 	elseif name == "panicstate" then

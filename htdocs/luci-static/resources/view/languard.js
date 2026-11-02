@@ -37,6 +37,7 @@ var callSync = rpc.declare({ object: 'luci.languard', method: 'sync' });
 var callAppList = rpc.declare({ object: 'luci.languard', method: 'applist' });
 var callAppStats = rpc.declare({ object: 'luci.languard', method: 'appstats' });
 var callBlockAudit = rpc.declare({ object: 'luci.languard', method: 'blockaudit', params: [ 'limit' ] });
+var callFix = rpc.declare({ object: 'luci.languard', method: 'fix', params: [ 'id' ] });
 var callAppImport = rpc.declare({ object: 'luci.languard', method: 'appimport', params: ['text'] });
 var callAppDel = rpc.declare({ object: 'luci.languard', method: 'appdel', params: ['id'] });
 var callSigList = rpc.declare({ object: 'luci.languard', method: 'siglist', params: ['name'] });
@@ -2021,7 +2022,9 @@ return view.extend({
 			nfthook: _('Firewall rules'),
 			geodb: _('Region database'),
 			state: _('State storage'),
-			autoprot: _('Automatic protection')
+			autoprot: _('Automatic protection'),
+			appstats: _('Traffic counters'),
+			luci_realip: _('LuCI client address')
 		};
 
 		var head = document.getElementById('cb-health-head');
@@ -2040,7 +2043,9 @@ return view.extend({
 		}
 
 		var self = this;
-		var FIXABLE = { nftset: 1, rulesfile: 1, nfthook: 1 };
+		// 每一项都对应后端 methods.fix 里的一条恢复动作
+		var FIXABLE = { nftset: 1, rulesfile: 1, nfthook: 1,
+		                watcher: 1, appstats: 1, logread: 1, luci_realip: 1 };
 
 		list.forEach(function (c) {
 			var bad = !c.ok;
@@ -2051,7 +2056,7 @@ return view.extend({
 					E('button', {
 						'class': 'cb-btn cb-btn-primary',
 						'style': 'font-size:.75rem;padding:.1rem .55rem',
-						'click': function (ev) { self.handleSync(ev); }
+						'click': function (ev) { self.handleFix(ev, c.id); }
 					}, _('Fix now'))));
 			}
 			box.appendChild(E('div', { 'class': 'cb-check' + (bad ? ' bad' : '') }, [
@@ -2102,6 +2107,20 @@ return view.extend({
 			self.logs = next;
 			self.renderLogs();
 		}).catch(function () {});
+	},
+
+	handleFix: function (ev, id) {
+		var self = this;
+		var btn = ev.currentTarget;
+		btn.disabled = true;
+		return callFix(id).then(function (r) {
+			var what = (r && r.action) || 'done';
+			ui.addNotification(null, E('p', {}, _('Repair started') + ': ' + what), 'info');
+			window.setTimeout(function () { self.refreshHealth(); }, 2500);
+			window.setTimeout(function () { self.refreshHealth(); }, 8000);
+		}).catch(function (e) {
+			ui.addNotification(null, E('p', {}, e.message || _('Failed')), 'error');
+		}).finally(function () { btn.disabled = false; });
 	},
 
 	handleLogClear: function (ev) {
