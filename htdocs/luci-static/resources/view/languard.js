@@ -212,6 +212,8 @@ var STYLE = `
 .cb-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .cb-btn[disabled] { opacity: .45; cursor: default; }
 .cb-range { padding: .15rem .45rem; font-size: .72rem; }
+.cb-row-click:hover { background: var(--hover-faint); }
+.cb-subrow td { border-top: 1px solid var(--hairline); opacity: .85; }
 .cb-range-on { background: var(--hover-faint); border-color: var(--focus-ring); }
 .cb-btn-danger { border-color: var(--danger); color: var(--danger); }
 .cb-btn-danger:hover { background: var(--danger-surface); }
@@ -1189,42 +1191,55 @@ return view.extend({
 		};
 		var plist = (this.appStats && this.appStats.proxy) || [];
 		var ptot = (this.appStats && this.appStats.proxy_total) || 0;
+		var hlist = (this.appStats && this.appStats.hosts) || [];
 		var ptb = document.getElementById('cb-proxy-tbody');
 		if (ptb) {
 			while (ptb.firstChild) ptb.removeChild(ptb.firstChild);
 			var phead = document.getElementById('cb-proxy-total');
 			if (phead) phead.textContent = ptot ? fmtBytes(ptot) : '';
 			if (!plist.length) {
-				ptb.appendChild(E('tr', {}, E('td', { 'colspan': 2, 'class': 'cb-empty' },
+				ptb.appendChild(E('tr', {}, E('td', { 'colspan': 3, 'class': 'cb-empty' },
 					_('Nothing went through the proxy in this window'))));
 			}
+			var top = plist.length ? plist[0].bytes : 0;
+			var byGroup = {};
+			hlist.forEach(function (x) {
+				var k = x.group || '?';
+				(byGroup[k] = byGroup[k] || []).push(x);
+			});
 			plist.forEach(function (g) {
-				ptb.appendChild(E('tr', {}, [
-					E('td', {}, g.group),
-					E('td', { 'style': 'text-align:right' }, fmtBytes(g.bytes))
-				]));
-			});
-		}
-
-		var ntb = document.getElementById('cb-node-tbody');
-		if (ntb) {
-			while (ntb.firstChild) ntb.removeChild(ntb.firstChild);
-			((this.appStats && this.appStats.nodes) || []).forEach(function (x) {
-				ntb.appendChild(E('tr', {}, [
-					E('td', {}, x.node),
-					E('td', { 'style': 'text-align:right' }, fmtBytes(x.bytes))
-				]));
-			});
-		}
-		var htb = document.getElementById('cb-host-tbody');
-		if (htb) {
-			while (htb.firstChild) htb.removeChild(htb.firstChild);
-			((this.appStats && this.appStats.hosts) || []).slice(0, 25).forEach(function (x) {
-				htb.appendChild(E('tr', {}, [
-					E('td', { 'class': 'cb-mono', 'style': 'font-size:.78rem' }, x.host || '(ip)'),
-					E('td', { 'class': 'cb-hide-sm', 'style': 'font-size:.75rem;opacity:.7' }, x.node || ''),
-					E('td', { 'style': 'text-align:right' }, fmtBytes(x.bytes))
-				]));
+				var kids = (byGroup[g.group] || []).slice(0, 12);
+				var nodes = {};
+				(byGroup[g.group] || []).forEach(function (x) { if (x.node) nodes[x.node] = 1; });
+				var nodeName = Object.keys(nodes)[0] || '';
+				var open = false;
+				var main = E('tr', { 'class': 'cb-row-click' }, [
+					E('td', {}, (kids.length ? '\u25b8 ' : '') + g.group),
+					E('td', { 'class': 'cb-hide-sm', 'style': 'font-size:.78rem;opacity:.7' }, nodeName),
+					E('td', { 'style': 'text-align:right' }, [
+						E('span', { 'style': 'display:inline-block;height:.5rem;border-radius:2px;background:var(--accent);opacity:.55;vertical-align:middle;margin-right:.5rem;width:' +
+							(top ? Math.max(2, Math.round(60 * g.bytes / top)) : 0) + 'px' }),
+						E('span', {}, fmtBytes(g.bytes))
+					])
+				]);
+				if (kids.length) {
+					main.style.cursor = 'pointer';
+					main.addEventListener('click', function () {
+						open = !open;
+						main.firstChild.textContent = (open ? '\u25be ' : '\u25b8 ') + g.group;
+						kids.forEach(function (x) {
+							if (!open) { if (x._row) { x._row.remove(); x._row = null; } return; }
+							if (x._row) return;
+							x._row = E('tr', { 'class': 'cb-subrow' }, [
+								E('td', { 'class': 'cb-mono', 'style': 'font-size:.76rem;padding-left:1.4rem' }, x.host || '(ip)'),
+								E('td', { 'class': 'cb-hide-sm' }),
+								E('td', { 'style': 'text-align:right;font-size:.78rem;opacity:.8' }, fmtBytes(x.bytes))
+							]);
+							main.parentNode.insertBefore(x._row, main.nextSibling);
+						});
+					});
+				}
+				ptb.appendChild(main);
 			});
 		}
 
@@ -3167,21 +3182,10 @@ E('div', { 'class': 'cb-card' }, [
 						E('table', { 'class': 'cb-table' }, [
 							E('thead', {}, E('tr', {}, [
 								E('th', {}, _('Rule group')),
-								E('th', { 'style': 'text-align:right' }, _('Traffic'))
+								E('th', { 'class': 'cb-hide-sm' }, _('Node')),
+								E('th', { 'style': 'text-align:right;width:9rem' }, _('Traffic'))
 							])),
 							E('tbody', { 'id': 'cb-proxy-tbody' })
-						])
-					]),
-					E('div', { 'style': 'margin-top:.9rem;font-size:.78rem;opacity:.65' }, _('Node')),
-					E('div', { 'class': 'cb-tablewrap' }, [
-						E('table', { 'class': 'cb-table' }, [
-							E('tbody', { 'id': 'cb-node-tbody' })
-						])
-					]),
-					E('div', { 'style': 'margin-top:.9rem;font-size:.78rem;opacity:.65' }, _('Domains sent through it')),
-					E('div', { 'class': 'cb-tablewrap' }, [
-						E('table', { 'class': 'cb-table' }, [
-							E('tbody', { 'id': 'cb-host-tbody' })
 						])
 					]),
 					E('div', { 'style': 'margin-top:.5rem;font-size:.78rem;opacity:.65' },
