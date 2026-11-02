@@ -1504,6 +1504,13 @@ function IDX.build(apps)
 					idx.label[h] = idx.label[h] or a
 				else
 					idx.substr[#idx.substr + 1] = { host = h, app = a, proto = sig.proto }
+					-- "*.googlevideo.com" is how the feed writes a domain rule;
+					-- registering the base makes a narrow app own it before a
+					-- broad category that spells the same domain out exactly
+					local base = h:match("^%*%.(.+)$")
+					if base and base:find(".", 1, true) and not base:find("*", 1, true) then
+						idx.suffix[base] = idx.suffix[base] or a
+					end
 				end
 			elseif sig.dport and sig.dport ~= "" then
 				idx.port[#idx.port + 1] = { dport = sig.dport, proto = sig.proto, app = a }
