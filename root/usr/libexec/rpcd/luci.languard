@@ -1953,7 +1953,7 @@ function methods.appstats(range)
 		                      node = nl[1] and nl[1].node, group = gl[1] and gl[1].group }
 	end
 	table.sort(hlist, function(a, b) return a.bytes > b.bytes end)
-	while #hlist > 200 do table.remove(hlist) end
+	while #hlist > 1000 do table.remove(hlist) end
 
 	return { success = true, running = true, day = st.day or "", range = range or "today",
 	         apps = names, dev = devs, per_app = per_app,
