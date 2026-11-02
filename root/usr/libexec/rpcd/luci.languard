@@ -1405,6 +1405,24 @@ load_apps = function()
 	local d = load_json_map(APPS_FILE, function() return { seq = 0, apps = {} } end)
 	d.seq = tonumber(d.seq) or 0
 	d.apps = type(d.apps) == "table" and d.apps or {}
+	-- the curated library and the feed often describe the same app under
+	-- spellings that differ only in case; two rows for one app splits its
+	-- traffic, so they are folded together here and merged everywhere after
+	local byname, uniq = {}, {}
+	for _, a in ipairs(d.apps) do
+		local k = (a.name or ""):lower()
+		local m = byname[k]
+		if not m then
+			byname[k] = a
+			uniq[#uniq + 1] = a
+		else
+			if m.feed and not a.feed then
+				m.name, m.class, m.feed = a.name, a.class or m.class, a.feed
+			end
+			for _, sig in ipairs(a.sigs or {}) do m.sigs[#m.sigs + 1] = sig end
+		end
+	end
+	d.apps = uniq
 	_apps_cache = d
 	return d
 end
