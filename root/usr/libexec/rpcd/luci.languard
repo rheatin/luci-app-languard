@@ -4509,8 +4509,25 @@ function methods.tick()
 	-- clear the shared copy so this tick rebuilds it from the current table
 	IDX.ct = nil
 	IDX.memo = {}
-	local apps = collect_app_stats(now)
+	local apps, stat_err = pcall(collect_app_stats, now)
+	if not apps then
+		-- 一处异常不该让整轮停摆:应用统计失败时其余维护照常进行,
+		-- 但要把错误和时间记下来,健康检查才有东西可看
+		stat_err = tostring(stat_err)
+	else
+		stat_err = nil
+	end
 	IDX.ct, IDX.memo = nil, nil
+	local stt = load_json_map(STATE_DIR .. "/tickstate.json", function() return {} end)
+	stt.last = now
+	if stat_err then
+		stt.error = stat_err:sub(1, 200)
+		stt.error_at = now
+	else
+		stt.error = nil
+		stt.ok_at = now
+	end
+	save_json_map(STATE_DIR .. "/tickstate.json", stt)
 	if IDX.appips_dirty then
 		save_json_map(APPIPS_FILE, IDX.appips)
 		IDX.appips, IDX.appips_dirty = nil, nil
@@ -4768,6 +4785,17 @@ function methods.selfcheck()
 	if fh then fh:write("x") fh:close() fs.unlink(probe) end
 	add("state", writable, writable and "writable" or STATE_DIR .. " not writable",
 		writable and "" or "check directory permissions")
+
+	-- 7b) 应用统计是否还在推进。tick 曾在升级后每轮抛错,账本静默冻结
+	local ts = load_json_map(STATE_DIR .. "/tickstate.json", function() return {} end)
+	local age = ts.ok_at and (os.time() - tonumber(ts.ok_at)) or nil
+	local stale_min = 5
+	local fresh = age ~= nil and age <= stale_min * 60
+	add("appstats", fresh,
+		age and string.format("last successful tick %d min ago", math.floor(age / 60))
+		    or "never recorded a successful tick",
+		fresh and "" or ((ts.error and ("last error: " .. ts.error .. " — ")) or "") ..
+		                 "/etc/init.d/languard restart")
 
 	-- 8) automatic protection
 	local cfg = load_autocfg()
