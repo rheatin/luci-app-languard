@@ -1205,8 +1205,12 @@ return view.extend({
 			var top = hlist.length ? hlist[0].bytes : 0;
 			hlist.slice(0, this.proxyTop || 10).forEach(function (x) {
 				var tags = [];
-				if (x.node) tags.push(E('span', { 'class': 'cb-tag cb-tag-node' }, x.node));
-				if (x.group) tags.push(E('span', { 'class': 'cb-tag' }, x.group));
+				(x.groups || []).forEach(function (g, i) {
+					if (i < 4) tags.push(E('span', { 'class': 'cb-tag', 'title': fmtBytes(g.bytes) }, g.group));
+				});
+				(x.nodes || []).forEach(function (n, i) {
+					if (i < 4) tags.push(E('span', { 'class': 'cb-tag cb-tag-node', 'title': fmtBytes(n.bytes) }, n.node));
+				});
 				ptb.appendChild(E('tr', {}, [
 					E('td', { 'class': 'cb-mono', 'style': 'font-size:.78rem' }, x.host || '(ip)'),
 					E('td', { 'class': 'cb-hide-sm' }, tags),

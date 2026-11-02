@@ -1793,10 +1793,14 @@ local function collect_app_stats(now)
 							local e = st.ph[host]
 							if not e then
 								if #st.ph > 4000 then st.ph = {} end
-								e = { n = fc.o, g = g }
+								e = { b = 0, n = {}, g = {} }
 								st.ph[host] = e
 							end
+							-- a name can leave through several nodes over a day;
+							-- keep every one of them with its own share
 							e.b = (e.b or 0) + delta
+							e.n[fc.o] = (e.n[fc.o] or 0) + delta
+							e.g[g] = (e.g[g] or 0) + delta
 						end
 					end
 					local app, conf = classify_flow(apps, proto, remote_port, remote_ip, host)
@@ -1869,8 +1873,16 @@ function methods.appstats(range)
 		for k, v in pairs(b.node or {}) do nodes[k] = (nodes[k] or 0) + v end
 		for k, v in pairs(b.ph or {}) do
 			local e = ph[k]
-			if not e then e = { n = v.n, g = v.g, b = 0 }; ph[k] = e end
+			if not e then e = { b = 0, n = {}, g = {} }; ph[k] = e end
 			e.b = e.b + (v.b or 0)
+			if type(v.n) == "table" then
+				for n, x in pairs(v.n) do e.n[n] = (e.n[n] or 0) + x end
+				for n, x in pairs(v.g or {}) do e.g[n] = (e.g[n] or 0) + x end
+			else
+				-- entries written before the split existed carry one name
+				if v.n then e.n[v.n] = (e.n[v.n] or 0) + (v.b or 0) end
+				if v.g then e.g[v.g] = (e.g[v.g] or 0) + (v.b or 0) end
+			end
 		end
 		for k, v in pairs(b.apps or {}) do apps[k] = (apps[k] or 0) + v end
 		for k, v in pairs(b.low or {}) do low[k] = (low[k] or 0) + v end
@@ -1926,9 +1938,19 @@ function methods.appstats(range)
 	for k, bytes in pairs(nodes) do nlist[#nlist + 1] = { node = k, bytes = bytes } end
 	table.sort(nlist, function(a, b) return a.bytes > b.bytes end)
 
+	local function ranked(m, key)
+		local out = {}
+		for k, v in pairs(m or {}) do out[#out + 1] = { [key] = k, bytes = v } end
+		table.sort(out, function(a, b) return a.bytes > b.bytes end)
+		return out
+	end
 	local hlist = {}
 	for host, e in pairs(ph) do
-		hlist[#hlist + 1] = { host = host, bytes = e.b or 0, node = e.n, group = e.g }
+		local nl = ranked(e.n, "node")
+		local gl = ranked(e.g, "group")
+		hlist[#hlist + 1] = { host = host, bytes = e.b or 0,
+		                      nodes = nl, groups = gl,
+		                      node = nl[1] and nl[1].node, group = gl[1] and gl[1].group }
 	end
 	table.sort(hlist, function(a, b) return a.bytes > b.bytes end)
 	while #hlist > 200 do table.remove(hlist) end
