@@ -1187,6 +1187,25 @@ return view.extend({
 			selfC.appFilter = (selfC.appFilter === name) ? null : name;
 			selfC.renderAppStats();
 		};
+		var plist = (this.appStats && this.appStats.proxy) || [];
+		var ptot = (this.appStats && this.appStats.proxy_total) || 0;
+		var ptb = document.getElementById('cb-proxy-tbody');
+		if (ptb) {
+			while (ptb.firstChild) ptb.removeChild(ptb.firstChild);
+			var phead = document.getElementById('cb-proxy-total');
+			if (phead) phead.textContent = ptot ? fmtBytes(ptot) : '';
+			if (!plist.length) {
+				ptb.appendChild(E('tr', {}, E('td', { 'colspan': 2, 'class': 'cb-empty' },
+					_('Nothing went through the proxy in this window'))));
+			}
+			plist.forEach(function (g) {
+				ptb.appendChild(E('tr', {}, [
+					E('td', {}, g.group),
+					E('td', { 'style': 'text-align:right' }, fmtBytes(g.bytes))
+				]));
+			});
+		}
+
 		var tbody = document.getElementById('cb-app-tbody');
 		if (!tbody) return;
 		while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
@@ -3114,6 +3133,25 @@ E('div', { 'class': 'cb-card' }, [
 						E('button', { 'class': 'cb-btn', 'click': function (ev) { self.refreshAppStats(ev); } }, _('Refresh')),
 						E('button', { 'class': 'cb-btn cb-btn-danger', 'click': function (ev) { self.handleAppReset(ev); } }, _('Reset counters'))
 					])
+				])
+			]),
+			E('div', { 'class': 'cb-card' }, [
+				E('div', { 'class': 'cb-card-head' }, [
+					E('span', { 'class': 'cb-dot' }), E('span', {}, _('Proxy quota')),
+					E('span', { 'class': 'cb-count', 'id': 'cb-proxy-total', 'style': 'margin-left:auto' }, '')
+				]),
+				E('div', { 'class': 'cb-card-body' }, [
+					E('div', { 'class': 'cb-tablewrap' }, [
+						E('table', { 'class': 'cb-table' }, [
+							E('thead', {}, E('tr', {}, [
+								E('th', {}, _('Rule group')),
+								E('th', { 'style': 'text-align:right' }, _('Traffic'))
+							])),
+							E('tbody', { 'id': 'cb-proxy-tbody' })
+						])
+					]),
+					E('div', { 'style': 'margin-top:.5rem;font-size:.78rem;opacity:.65' },
+						_('Counted from the routing decision Clash already made. Nothing is added to the packet path.'))
 				])
 			]),
 			E('div', { 'class': 'cb-card' }, [
