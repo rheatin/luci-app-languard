@@ -2063,25 +2063,23 @@ return view.extend({
 
 	refreshLogs: function () {
 		var self = this;
-		callBlockAudit('100').then(function (r) {
-			var tb = document.getElementById('cb-audit-tbody');
-			if (!tb) return;
-			while (tb.firstChild) tb.removeChild(tb.firstChild);
-			var evs = (r && r.events) || [];
-			if (!evs.length) {
-				tb.appendChild(E('tr', {}, E('td', { 'colspan': 4, 'class': 'cb-empty' },
-					_('Nothing has been blocked yet'))));
-			}
-			evs.forEach(function (e) {
-				tb.appendChild(E('tr', {}, [
-					E('td', { 'class': 'cb-mono', 'style': 'font-size:.75rem' }, e.ts || ''),
-					E('td', {}, e.kind || ''),
-					E('td', { 'class': 'cb-mono cb-hide-sm', 'style': 'font-size:.75rem' }, e.mac || '-'),
-					E('td', { 'class': 'cb-hide-sm', 'style': 'opacity:.8' }, e.note || '')
-				]));
+		// 封禁记录和登录记录合成一条时间线:它们回答的是同一类问题
+		var audit = callBlockAudit('100').then(function (r) {
+			return ((r && r.events) || []).map(function (e) {
+				var ts = Math.round(new Date(String(e.ts).replace(' ', 'T')).getTime() / 1000) || 0;
+				var t = ts ? fmtTime(ts) : String(e.ts || '');
+				return { ts: ts, kind: e.kind === 'panic' ? 'panic' : e.kind,
+				         result: e.kind === 'unblock' ? 'closed' : 'failure',
+				         ip: e.ip && e.ip !== '-' ? e.ip : '',
+				         user: e.mac && e.mac !== '-' ? e.mac : '',
+				         detail: (e.note || '') };
 			});
-		}).catch(function () {});
-		return callLogList('500').then(function (res) {
+		}).catch(function () { return []; });
+		return Promise.all([ callLogList('500'), audit ]).then(function (both) {
+			var res = both[0];
+			var merged = ((res && res.entries) || []).concat(both[1]);
+			merged.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+			res = { entries: merged };
 			var next = (res && res.entries) || [];
 			var prev = self.logs || [];
 			// Only touch the DOM when the head changed, so the flash animation
@@ -2187,7 +2185,7 @@ return view.extend({
 
 		if (!list.length) {
 			tbody.appendChild(E('tr', {}, E('td', { 'colspan': 7, 'class': 'cb-empty' },
-				all.length ? _('No entries match the filter') : _('No login activity recorded yet'))));
+				all.length ? _('No entries match the filter') : _('No activity recorded yet'))));
 		}
 
 		var lastDay = null;
@@ -3343,26 +3341,6 @@ E('div', { 'class': 'cb-card' }, [
 		}, [
 			E('p', { 'style': 'opacity:.75;margin:.25rem 0 1rem' },
 				_('Every successful and failed login through SSH or LuCI, newest first. Kept in memory-backed storage, capped at 500 entries.')),
-			E('div', { 'class': 'cb-card', 'style': 'margin-bottom:1rem' }, [
-				E('div', { 'class': 'cb-card-head' }, [
-					E('span', { 'class': 'cb-dot' }), E('span', {}, _('Block and unblock history')),
-					E('span', { 'class': 'cb-count', 'style': 'margin-left:auto' },
-						_('who blocked what, and when'))
-				]),
-				E('div', { 'class': 'cb-card-body' }, [
-					E('div', { 'class': 'cb-tablewrap' }, [
-						E('table', { 'class': 'cb-table' }, [
-							E('thead', {}, E('tr', {}, [
-								E('th', {}, _('Time')),
-								E('th', {}, _('Action')),
-								E('th', { 'class': 'cb-hide-sm' }, _('Device')),
-								E('th', { 'class': 'cb-hide-sm' }, _('Reason'))
-							])),
-							E('tbody', { 'id': 'cb-audit-tbody' })
-						])
-					])
-				])
-			]),
 			E('div', { 'class': 'cb-log-filters' }, [
 				E('input', {
 					'type': 'text',
