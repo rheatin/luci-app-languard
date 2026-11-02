@@ -1763,7 +1763,7 @@ local function collect_app_stats(now)
 						st.node[fc.o] = (st.node[fc.o] or 0) + delta
 						-- which names actually went out that way, so a group
 						-- can be traced back to the addresses behind it
-						if host then
+						if host and host ~= "" then
 							st.ph = st.ph or {}
 							local e = st.ph[host]
 							if not e then
@@ -1906,7 +1906,7 @@ function methods.appstats(range)
 		hlist[#hlist + 1] = { host = host, bytes = e.b or 0, node = e.n, group = e.g }
 	end
 	table.sort(hlist, function(a, b) return a.bytes > b.bytes end)
-	while #hlist > 60 do table.remove(hlist) end
+	while #hlist > 200 do table.remove(hlist) end
 
 	return { success = true, running = true, day = st.day or "", range = range or "today",
 	         apps = names, dev = devs, per_app = per_app,
