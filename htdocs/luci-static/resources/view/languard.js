@@ -1174,6 +1174,7 @@ return view.extend({
 	refreshAppStats: function (range) {
 		var self = this;
 		if (typeof range !== 'string') range = self.appRange || 'today';
+		self.appStatsAt = Date.now();
 		self.appRange = range;
 		return Promise.all([ callAppList(), callAppStats({ range: range }) ]).then(function (r) {
 			self.apps = (r[0] && r[0].apps) || [];
@@ -3551,6 +3552,13 @@ E('div', { 'class': 'cb-card' }, [
 			if (self.tab === 'ips') return self.refreshIps();
 			if (self.tab === 'logs') return self.refreshLogs();
 			if (self.tab === 'policy') return self.refreshSched();
+			if (self.tab === 'apps') {
+				// 账本是每 60 秒 tick 一次才更新的,15 秒轮询足够,不必每轮都问
+				var now = Date.now();
+				if (now - (self.appStatsAt || 0) < 15000) return;
+				self.appStatsAt = now;
+				return self.refreshAppStats();
+			}
 			if (self.tab === 'settings') return self.refreshNotify();
 
 			return self.refresh();

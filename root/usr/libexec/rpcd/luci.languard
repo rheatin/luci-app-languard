@@ -1841,6 +1841,14 @@ local function collect_app_stats(now)
 								if #st.ph > 4000 then st.ph = {} end
 								e = { b = 0, n = {}, g = {} }
 								st.ph[host] = e
+							elseif type(e.n) ~= "table" then
+								-- 早期版本把节点和分组各存成一个字符串;
+								-- 直接索引它会让整个 tick 抛错停摆
+								local on, og, ob = e.n, e.g, e.b or 0
+								e = { b = ob, n = {}, g = {} }
+								if on and on ~= "" then e.n[on] = ob end
+								if og and og ~= "" then e.g[og] = ob end
+								st.ph[host] = e
 							end
 							-- a name can leave through several nodes over a day;
 							-- keep every one of them with its own share
