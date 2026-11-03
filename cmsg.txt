@@ -1,12 +1,13 @@
-refactor: 拆出 domains.lua
+refactor: 拆出 feeds.lua
 
-域名黑名单的写入、hosts 文件生成、dnsmasq 登记、命中查询全部移入
-languard/domains.lua。它拥有 DOMAIN_FILE 与 DOMAIN_HOSTS 两个文件。
+订阅源的三种形态(IP 列表、域名列表、geosite 分类)、下载解析、整源替换、
+到期刷新全部移入 languard/feeds.lua。它拥有 feeds.json 的写入权,并通过
+注入的锁与 ipstate 读写与 tick 协作。
 
-启动期补登记(addnhosts + 重启一次 dnsmasq)与运行期刷新(只发 HUP)
-在同一个模块里,两者的区别第一次有了明确归属。
+主文件 4629 → 4261 行。九个模块合计 1799 行:
 
-主文件 4771 → 4629 行,共 8 个模块。
+  json 66 · nft 85 · net 177 · devices 114 · system 129
+  apps 387 · notify 185 · domains 191 · feeds 465
 
-实测:域名增删生效(hosts 文件同步写入 2 行:IPv4 + IPv6 各一条),
-删除后恢复;健康 OK,list/domainlist/domainhits/notifyget/appstats 正常。
+实测:tick 正常返回,健康 OK,list/appstats/domainlist/feedlist/notifyget/
+qoslist 全部通过。
