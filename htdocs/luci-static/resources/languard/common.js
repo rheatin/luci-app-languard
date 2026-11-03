@@ -531,6 +531,13 @@ var IP_CATS = [
 var APP_FILTER = null;
 var APP_CHIP_CLICK = null;
 
+// 视图持有自己的筛选状态,通过这里同步给 appChip;
+// 直接跨模块给变量赋值在严格模式下会抛 ReferenceError。
+function setAppFilter(name, onClick) {
+	APP_FILTER = name || null;
+	APP_CHIP_CLICK = onClick || null;
+}
+
 function appChip(name, text) {
 	var h = appHue(name);
 	var dim = APP_FILTER && APP_FILTER !== name;
@@ -669,6 +676,7 @@ return baseclass.extend({
 	callRename: callRename,
 	fmtBytes: fmtBytes,
 	fmtGeo: fmtGeo,
+	setAppFilter: setAppFilter,
 	appChip: appChip,
 	appHue: appHue,
 	catMeta: catMeta,

@@ -1,14 +1,17 @@
-fix: rpcd 方法签名缺参数,前端传值被丢弃
+fix: 拆分时丢失的顶层变量声明让流量表整片空白
 
-appstats 在 list 声明里写成 appstats = {},而前端调用带 range。rpcd 只转发
-声明过的参数,所以"今天/昨天/近7天"三个窗口永远返回同一个默认值;list 的
-probe 参数同样丢失,设备列表拿不到主动探测结果。
+APP_FILTER / APP_CHIP_CLICK 原本在视图顶层声明,拆 common.js 时随格式化
+函数区块一起被删掉了,只剩视图里对它们的赋值。严格模式下给未声明标识符
+赋值抛 ReferenceError,而 renderAppStats 第一行正是这个赋值。
 
-这类问题不会报错,只是静默按默认值执行——比崩溃更难发现。
+后果:表格连空状态都不出现——thead 是静态标记所以还在,tbody 由渲染函数
+填,函数在第一行就死了。
 
-补上两处签名后实测:
-  today      apps=93  dev=33
-  week       apps=149 dev=40
-  yesterday  apps=145 dev=39
+错误还被 refreshAppStats 的 .catch(function(){}) 吞掉,控制台干净得像没
+有问题。这条 catch 现在会打 console.error。
 
-顺带按 HANDLERS 表逐个核对:其余方法用到的 req.* 都在签名里声明过。
+另外 appChip 在 common.js 里读的是它自己那份 APP_FILTER,视图更新的是另
+一份,筛选变暗会失效;加 common.setAppFilter() 把状态同步过去。
+
+实测(离线喂真实数据):renderAppStats OK,应用 50 行、代理 10 行,
+首行 TENCENT / 683759.7 MB。

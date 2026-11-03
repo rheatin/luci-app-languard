@@ -11,6 +11,11 @@ var fmtBytes = common.fmtBytes, fmtGeo = common.fmtGeo, fmtTime = common.fmtTime
 var appChip = common.appChip, appHue = common.appHue, catMeta = common.catMeta;
 var typeLabel = common.typeLabel;
 
+// 应用筛选状态。common.js 里也有一份同名变量供 appChip 使用,
+// 严格模式下给未声明的标识符赋值会抛 ReferenceError。
+var APP_FILTER = null;
+var APP_CHIP_CLICK = null;
+
 // RPC 声明全部来自 common.js
 var callList = common.callList;
 var callBlock = common.callBlock;
@@ -721,7 +726,7 @@ return view.extend({
 			if (sel) delete sel.dataset.filled;
 			var day = document.getElementById('cb-app-day');
 			if (day) day.textContent = self.appStats.day || '';
-		}).catch(function () {});
+		}).catch(function (e) { console.error('languard: app stats refresh failed', e); });
 	},
 
 	renderAppStats: function () {
@@ -731,6 +736,8 @@ return view.extend({
 			selfC.appFilter = (selfC.appFilter === name) ? null : name;
 			selfC.renderAppStats();
 		};
+		// appChip 在 common.js 里,状态要同步过去
+		common.setAppFilter(APP_FILTER, APP_CHIP_CLICK);
 		var plist = (this.appStats && this.appStats.proxy) || [];
 		var ptot = (this.appStats && this.appStats.proxy_total) || 0;
 		var hlist = (this.appStats && this.appStats.hosts) || [];
