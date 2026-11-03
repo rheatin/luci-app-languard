@@ -58,6 +58,8 @@ local load_domains, save_domains, is_domain_token, apply_domains
 local collect_devices
 local learn_app_ip
 local load_apps, save_apps
+-- methods.ipdel 在定义处就引用这两个,必须先声明,否则解析成全局 nil
+local load_scan, save_scan
 
 
 local function trim(s)
@@ -145,6 +147,28 @@ end
 
 -- "1.2.3.4" or "1.2.3.0/24" -> normalized form, or nil
 local function normalize_ip(v)
+	-- 嵌套在函数内部:顶层已经有 200 个局部变量的上限
+	local function valid_v6(x)
+		if not x:find(":", 1, true) then return false end
+		local dc, pos = 0, 1
+		while true do
+			local i = x:find("::", pos, true)
+			if not i then break end
+			dc = dc + 1
+			if dc > 1 then return false end
+			pos = i + 2
+		end
+		local groups = 0
+		for g in (x .. ":"):gmatch("([^:]*):") do
+			if g ~= "" then
+				if #g > 4 or g:find("[^0-9a-fA-F]") then return false end
+				groups = groups + 1
+			end
+		end
+		if dc > 0 then return groups <= 7 end
+		return groups == 8
+	end
+
 	if not v then return nil end
 	v = trim(v)
 	if v == "" or #v > 43 then return nil end
@@ -162,18 +186,17 @@ local function normalize_ip(v)
 		if a > 255 or b > 255 or c > 255 or d > 255 then return nil end
 		return string.format("%d.%d.%d.%d", a, b, c, d)
 	end
-	-- IPv6 literal or prefix (permissive; nft validates strictly)
+	-- IPv6 literal or prefix. 必须在这里判死:一条 nft 拒收的地址会让整个
+	-- fw4 reload 失败,而失败前已经卸载了我们自己的链,封禁会静默消失。
 	local v6, plen6 = v:match("^([0-9a-fA-F:]+)/(%d+)$")
 	if v6 then
 		plen6 = tonumber(plen6)
-		if plen6 and plen6 <= 128 and v6:find(":") then
+		if plen6 and plen6 <= 128 and valid_v6(v6) then
 			return v6:lower() .. "/" .. plen6
 		end
 		return nil
 	end
-	if v:match("^[0-9a-fA-F:]+$") and v:find(":") then
-		return v:lower()
-	end
+	if valid_v6(v) then return v:lower() end
 	return nil
 end
 
@@ -1864,7 +1887,9 @@ local function collect_app_stats(now)
 						counted = counted + delta
 					end
 				end
-				fresh[key] = { b = total, app = app and app.name or nil }
+				-- app 是上一个块里的局部变量,这里读不到;该字段也从未被
+				-- 读取或写回,直接去掉,别留下一个永远为 nil 的假数据
+				fresh[key] = { b = total }
 			end
 		end
 	end
@@ -2730,14 +2755,38 @@ function methods.exportconfig()
 end
 
 -- ubus 消息装不下 2MB 的应用库,所以把备份写到 /www 下再让浏览器下载。
--- 文件名带时间戳,旧的会覆盖,不会堆满 flash。
+-- /www 是 uhttpd 的静态根,不经过 LuCI 认证,所以:
+--   * 文件名随机,猜不到
+--   * 令牌一律打码,导入时"***"表示保留原值
+--   * 每次导出先删掉上一份
 function methods.exportfile()
 	local out = methods.exportconfig()
+	local ntf = out.data.notify
+	if type(ntf) == "table" and type(ntf.channels) == "table" then
+		for _, c in ipairs(ntf.channels) do
+			if type(c) == "table" and c.token and c.token ~= "" then c.token = "***" end
+		end
+	end
 	local body = jsonc.stringify(out)
-	local name = "languard-backup.json"
+	-- 清掉旧备份
+	local okd, dir = pcall(fs.dir, "/www")
+	if okd then
+		local f = dir()
+		while f do
+			if f:match("^languard%-backup.*%.json$") then fs.unlink("/www/" .. f) end
+			f = dir()
+		end
+	end
+	math.randomseed(os.time())
+	local name = string.format("languard-backup-%06x%04x.json",
+		math.random(0, 0xffffff), math.random(0, 0xffff))
 	local f = io.open("/www/" .. name, "w")
 	if not f then return err("cannot write /www") end
 	f:write(body) f:close()
+	-- uhttpd 以受限身份读取静态文件,0600 会 403
+	-- nixio 的 mode 参数按八进制字面值解释,传十进制 420 会得到 0420,
+	-- 所以直接交给 chmod 命令
+	pcall(function() sys.call("chmod 644 /www/" .. name) end)
 	return ok({ url = "/" .. name, size = #body,
 	            sections = (function() local n = 0 for _ in pairs(out.data) do n = n + 1 end return n end)() })
 end
@@ -2763,6 +2812,19 @@ function methods.importconfig(payload)
 	end
 	if type(p) ~= "table" or type(p.data) ~= "table" then return err("missing data") end
 	local n = 0
+	-- 导出的令牌是打码的,恢复时用现有的顶替,别把通配符写进去
+	local cur = p.data.notify
+	if type(cur) == "table" and type(cur.channels) == "table" then
+		local live = load_json_map(NOTIFY_FILE, function() return { channels = {} } end)
+		local byid = {}
+		for _, c in ipairs(live.channels or {}) do byid[tostring(c.id)] = c end
+		for _, c in ipairs(cur.channels) do
+			if type(c) == "table" and c.token == "***" then
+				local o = byid[tostring(c.id)]
+				c.token = (o and o.token) or nil
+			end
+		end
+	end
 	for key, path in pairs(CONFIG_FILES) do
 		local v = p.data[key]
 		if type(v) == "table" then
@@ -2945,7 +3007,10 @@ end
 -- Liveness: ping sweep in parallel, then re-read the neighbour table.
 -- Covers powered-but-quiet IoT devices that never appear REACHABLE.
 local function probe_online()
-	sys.call("for i in $(seq 2 254); do (ping -c1 -W1 192.168.1.$i >/dev/null 2>&1) & done; wait", 25)
+	-- 网段跟着 br-lan 走,不能被写死成 192.168.1.x
+	local base = lan_prefix() or "192.168.1"
+	sys.call(string.format(
+		"for i in $(seq 2 254); do (ping -c1 -W1 %s.$i >/dev/null 2>&1) & done; wait", base), 25)
 	return parse_neigh()
 end
 
@@ -3616,7 +3681,7 @@ end
 -- ============================================================
 local SCAN_STATE = STATE_DIR .. "/scan.json"
 
-local function load_scan()
+load_scan = function()
 	local f = io.open(SCAN_STATE, "r")
 	if not f then return { last = 0, hits = {} } end
 	local raw = f:read("*a")
@@ -3628,7 +3693,7 @@ local function load_scan()
 	return p
 end
 
-local function save_scan(sc)
+save_scan = function(sc)
 	fs.mkdirr(STATE_DIR)
 	local f = io.open(SCAN_STATE, "w")
 	if not f then return false end
@@ -3697,7 +3762,7 @@ local function scan_failures(cfg)
 						-- identify the exact line: same second can carry several
 						-- attempts, so hash the whole record instead of the stamp
 						local key = norm .. "@" .. tostring(#line) .. "@" .. line
-						if stamp == "" or sc.counted[key] == nil then
+						if sc.counted[key] == nil then
 							sc.counted[key] = now
 							local h = sc.hits[norm]
 							if h then

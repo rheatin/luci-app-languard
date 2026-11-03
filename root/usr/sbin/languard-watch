@@ -107,7 +107,12 @@ main() {
 		[ "$_pp" = "1" ] && kill -9 "$_p" 2>/dev/null
 	done
 
-	enabled || { logger -t "$LOG_TAG" "disabled, exiting"; exit 0; }
+	# 关闭时不能 exit:procd 会把重启配额耗光,用户再打开就永远起不来。
+	# 留在原地等开关变化。
+	while ! enabled; do
+		logger -t "$LOG_TAG" "automatic protection is off; waiting"
+		sleep 30
+	done
 	local th
 	th=$(threshold)
 	logger -t "$LOG_TAG" "started (threshold=$th)"
@@ -202,6 +207,8 @@ main() {
 		[ -n "$user" ] || user="(unknown)"
 
 		log_event "$kind" failure "$ip" "$user" "$detail"
+		# 总开关每轮都要看:面板关掉之后,运行中的 watcher 不能再累积计数
+		enabled || continue
 		enabled_kind "$kind" || continue
 		# re-read on every event: the panel can change it without a restart
 		count_ip "$ip" "$(threshold)" "$kind"

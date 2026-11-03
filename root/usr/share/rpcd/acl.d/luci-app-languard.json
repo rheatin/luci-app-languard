@@ -112,7 +112,7 @@
 				"/bin/fw4": [
 					"exec"
 				],
-				"/www/languard-backup.json": [
+				"/www/languard-backup-*.json": [
 					"write"
 				]
 			}
