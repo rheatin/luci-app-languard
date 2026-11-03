@@ -3972,7 +3972,7 @@ local HANDLERS = {
 if arg[1] == "list" then
 	-- rpcd requires {} for "no arguments"; jsonc emits [] for an empty table
 	local s2 = jsonc.stringify({
-		list        = {},
+		list        = { probe = "" },
 		status      = {},
 		block       = { mac = "", host = "", ip = "", source = "", minutes = "" },
 		unblock     = { mac = "" },
@@ -4015,7 +4015,7 @@ if arg[1] == "list" then
 		sample_save  = { name = "", proto = "", dport = "", prefix = "", cls = "" },
 		qosadd      = { ip = "", app = "", dscp = "" },
 		qosdel      = { id = "" },
-		appstats    = {},
+		appstats    = { range = "" },
 		appimport   = { text = "" },
 		appdel      = { id = "" },
 		siglist     = { name = "" },

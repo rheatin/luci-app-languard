@@ -1,10 +1,14 @@
-fix: common.js 必须是构造函数而不是裸对象
+fix: rpcd 方法签名缺参数,前端传值被丢弃
 
-LuCI 的 require 要求模块工厂返回函数(baseclass 派生类),返回普通对象会抛
-"factory yields invalid constructor",整个视图加载失败。
+appstats 在 list 声明里写成 appstats = {},而前端调用带 range。rpcd 只转发
+声明过的参数,所以"今天/昨天/近7天"三个窗口永远返回同一个默认值;list 的
+probe 参数同样丢失,设备列表拿不到主动探测结果。
 
-改为 baseclass.extend({...})。视图侧的用法不变:require 得到的是类实例,
-STYLE 与各 call* 都在原型上。
+这类问题不会报错,只是静默按默认值执行——比崩溃更难发现。
 
-注意:common.js 的 URL 带 resource_version 参数,版本没变时浏览器会用缓存,
-升级后需要强制刷新。
+补上两处签名后实测:
+  today      apps=93  dev=33
+  week       apps=149 dev=40
+  yesterday  apps=145 dev=39
+
+顺带按 HANDLERS 表逐个核对:其余方法用到的 req.* 都在签名里声明过。

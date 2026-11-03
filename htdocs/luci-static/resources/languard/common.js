@@ -36,7 +36,7 @@ var callIpList = rpc.declare({
 
 var callSync = rpc.declare({ object: 'luci.languard', method: 'sync' });
 var callAppList = rpc.declare({ object: 'luci.languard', method: 'applist' });
-var callAppStats = rpc.declare({ object: 'luci.languard', method: 'appstats' });
+var callAppStats = rpc.declare({ object: 'luci.languard', method: 'appstats', params: [ 'range' ] });
 var callBlockAudit = rpc.declare({ object: 'luci.languard', method: 'blockaudit', params: [ 'limit' ] });
 var callFix = rpc.declare({ object: 'luci.languard', method: 'fix', params: [ 'id' ] });
 var callAppImport = rpc.declare({ object: 'luci.languard', method: 'appimport', params: ['text'] });
