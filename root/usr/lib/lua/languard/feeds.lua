@@ -81,14 +81,14 @@ local function geosite_categories(data)
 	local out = {}
 	local i = 1
 	while i <= #data do
-		local tag, wire, val, nxt = pb_field(data, i)
+		local tag, wire, val, nxt = D.pb_field(data, i)
 		if not tag then break end
 		i = nxt
 		if tag == 1 and wire == 2 then
 			local code, domains = nil, {}
 			local j = 1
 			while j <= #val do
-				local t2, w2, v2, n2 = pb_field(val, j)
+				local t2, w2, v2, n2 = D.pb_field(val, j)
 				if not t2 then break end
 				j = n2
 				if t2 == 1 and w2 == 2 then
@@ -97,7 +97,7 @@ local function geosite_categories(data)
 					local dtype, dval = 0, nil
 					local k = 1
 					while k <= #v2 do
-						local t3, w3, v3, n3 = pb_field(v2, k)
+						local t3, w3, v3, n3 = D.pb_field(v2, k)
 						if not t3 then break end
 						k = n3
 						if t3 == 1 and w3 == 0 then dtype = v3
@@ -273,11 +273,11 @@ local function refresh_due_feeds(now)
 
 	-- an app feed replaces a signature set, so reuse the manual path
 	if (due.kind or "ip") == "app" or (due.kind or "ip") == "geosite" then
-		local r = methods.feedrefresh(due.id)
+		local r = D.methods.feedrefresh(due.id)
 		return { id = due.id, name = due.name, app = true, ok = r and r.success or false }
 	end
 
-	local lk = D.lock_acquire(IPSTATE_FILE, 10)
+	local lk = D.lock_acquire(D.IPSTATE_FILE, 10)
 	local ips = D.load_ipstate()
 	local delta, why = fetch_feed(due, ips, now)
 	if not delta then
@@ -285,7 +285,7 @@ local function refresh_due_feeds(now)
 		-- do not hammer a broken source on every tick
 		due.last = now
 		save_json_map(D.FEEDS_FILE, f)
-		if lk then D.lock_release(IPSTATE_FILE) end
+		if lk then D.lock_release(D.IPSTATE_FILE) end
 		D.notify_event("feed_fail", "Feed failed: " .. due.name, tostring(why))
 		return { id = due.id, name = due.name, error = why }
 	end
@@ -293,7 +293,7 @@ local function refresh_due_feeds(now)
 	local dch = merge_feed_domains(due, delta.domains, now)
 	save_json_map(D.FEEDS_FILE, f)
 	D.save_ipstate(ips)
-	if lk then D.lock_release(IPSTATE_FILE) end
+	if lk then D.lock_release(D.IPSTATE_FILE) end
 	D.render_rules(D.load_state())
 	D.apply_ip_delta(delta)
 	if dch > 0 then D.apply_domains() end
@@ -375,7 +375,7 @@ function M.feeddel(id)
 		D.apply_domains()
 	end
 	D.render_rules(D.load_state())
-	reload_firewall()
+	D.reload_firewall()
 	return ok({})
 end
 
@@ -416,20 +416,20 @@ function M.feedrefresh(id)
 		return ok({ added = n, merged = n, total = n })
 	end
 
-	local lk = D.lock_acquire(IPSTATE_FILE, 10)
+	local lk = D.lock_acquire(D.IPSTATE_FILE, 10)
 	local ips = D.load_ipstate()
 	local delta, why = fetch_feed(fd, ips, os.time())
 	if not delta then
 		fd.last_error = why
 		save_json_map(D.FEEDS_FILE, f)
-		if lk then D.lock_release(IPSTATE_FILE) end
+		if lk then D.lock_release(D.IPSTATE_FILE) end
 		return err(why)
 	end
 
 	local dch = merge_feed_domains(fd, delta.domains, os.time())
 	save_json_map(D.FEEDS_FILE, f)
 	D.save_ipstate(ips)
-	if lk then D.lock_release(IPSTATE_FILE) end
+	if lk then D.lock_release(D.IPSTATE_FILE) end
 	D.render_rules(D.load_state())
 	D.apply_ip_delta(delta)
 	if dch > 0 then D.apply_domains() end

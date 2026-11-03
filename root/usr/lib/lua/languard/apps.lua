@@ -3,6 +3,8 @@
 -- 这里只有方法本身;识别索引、conntrack 采集、指纹这些热路径留在主文件,
 -- 通过 setup 注入。模块不持有任何状态文件。
 
+local sys = require "luci.sys"
+
 local M = {}
 local D = {}
 
@@ -155,10 +157,10 @@ function M.appimport(text)
 					-- consecutive separator, which shifts every later field;
 					-- anchoring on the separator keeps the columns aligned
 					local f = {}
-					for v in (part .. ";"):gmatch("([^;]*);") do f[#f + 1] = trim(v) end
+					for v in (part .. ";"):gmatch("([^;]*);") do f[#f + 1] = D.trim(v) end
 					while #f < 6 do f[#f + 1] = "" end
 					local sig = { proto = f[1], dport = f[3], host = f[4], dict = f[6] }
-					if sig_usable(sig, cls) then sigs[#sigs + 1] = sig end
+					if D.sig_usable(sig, cls) then sigs[#sigs + 1] = sig end
 				end
 				if #sigs > 0 then
 					local ex = by_name[name]
@@ -202,7 +204,7 @@ function M.sigadd(name, proto, dport, host)
 	for _, a in ipairs(d.apps) do
 		if a.name == name then
 			local sig = { proto = proto or "", dport = dport or "", host = host or "", dict = "" }
-			if not sig_usable(sig, a.class) then
+			if not D.sig_usable(sig, a.class) then
 				return D.err("that would match everything: give a hostname, or a game port")
 			end
 			a.sigs[#a.sigs + 1] = sig
@@ -360,7 +362,7 @@ function M.sample_result()
 end
 
 function M.sample_save(name, proto, dport, prefix, cls)
-	if not name or trim(name) == "" then return D.err("name required") end
+	if not name or D.trim(name) == "" then return D.err("name required") end
 	if not prefix or prefix == "" then return D.err("no fingerprint") end
 	local parts = {}
 	local i = 0
@@ -372,16 +374,16 @@ function M.sample_save(name, proto, dport, prefix, cls)
 
 	local d = D.load_apps()
 	for _, a in ipairs(d.apps) do
-		if a.name == trim(name) then
+		if a.name == D.trim(name) then
 			a.sigs[#a.sigs + 1] = { proto = proto or "", dport = dport or "", host = "", dict = dict }
 			D.save_apps(d)
 			return D.ok({ name = a.name, dict = dict, appended = true })
 		end
 	end
 	d.seq = d.seq + 1
-	d.apps[#d.apps + 1] = { id = d.seq, name = trim(name), class = cls or "game",
+	d.apps[#d.apps + 1] = { id = d.seq, name = D.trim(name), class = cls or "game",
 	                        sigs = { { proto = proto or "", dport = dport or "", host = "", dict = dict } } }
 	D.save_apps(d)
-	return D.ok({ name = trim(name), dict = dict, appended = false })
+	return D.ok({ name = D.trim(name), dict = dict, appended = false })
 end
 return M

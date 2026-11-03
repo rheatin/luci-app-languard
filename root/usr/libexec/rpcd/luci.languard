@@ -49,6 +49,7 @@ local NEIGH_CMD = "ip -4 neigh show dev br-lan 2>/dev/null"
 local methods = {}
 local _known_cache
 local ok, err, read_all
+local load_ipstate, save_ipstate
 local is_trusted_proxy, extract_forwarded
 local render_rules, reload_firewall, nft_chunk, set_exists, rebuild_sets, unload_rules, set_element_live
 local split_macs
@@ -69,8 +70,23 @@ save_json_map = jsonm.save
 lock_acquire = jsonm.lock
 lock_release = jsonm.unlock
 
+-- blocked_ips.json 的读写(IP 封禁状态,与 nft 规则分开)
+load_ipstate = function()
+	return load_json_map(IPSTATE_FILE, function() return {} end)
+end
+
+save_ipstate = function(st)
+	return save_json_map(IPSTATE_FILE, st)
+end
+
 nftm = require "languard.nft"
 nftm.setup({ rule_file = RULE_FILE, load_ips = function() return load_ipstate() end })
+nft_chunk = nftm.chunk
+set_exists = nftm.set_exists
+rebuild_sets = nftm.rebuild_sets
+unload_rules = nftm.unload
+set_element_live = nftm.set_element_live
+reload_firewall = nftm.reload_firewall
 
 netm = require "languard.net"
 netm.setup({ lease_file = LEASE_FILE, neigh_cmd = NEIGH_CMD })
@@ -117,15 +133,6 @@ end
 
 
 
-local function load_ipstate()
-	local f = io.open(IPSTATE_FILE, "r")
-	if not f then return {} end
-	local raw = f:read("*a")
-	f:close()
-	local parsed = jsonc.parse(raw)
-	if type(parsed) ~= "table" then return {} end
-	return parsed
-end
 
 local function save_ipstate(st)
 	fs.mkdirr(STATE_DIR)
@@ -417,7 +424,7 @@ function methods.wladd(mac)
 	local w = load_wl()
 	if not wl_has(mac) then w.macs[#w.macs + 1] = mac end
 	save_json_map(WL_FILE, w)
-	WL_CACHE = nil
+	devm.invalidate("wl")
 	-- a trusted device must not stay blocked
 	local st = load_state()
 	if st[mac] then
@@ -438,7 +445,7 @@ function methods.wldel(mac)
 	for _, m in ipairs(w.macs) do if m ~= mac then keep[#keep + 1] = m end end
 	w.macs = keep
 	save_json_map(WL_FILE, w)
-	WL_CACHE = nil
+	devm.invalidate("wl")
 	return ok({ count = #keep })
 end
 
@@ -718,44 +725,11 @@ local MAX_FEED_IPS = 20000
 -- atomic, so a single address that is not in the set makes the whole batch
 -- fail; when that happens each element is retried on its own so the rest
 -- still lands.
-local function nft_chunk(setname, verb, list)
-	if #list == 0 then return end
-	local i = 1
-	while i <= #list do
-		local j = math.min(i + 1999, #list)
-		local part = {}
-		for k = i, j do part[#part + 1] = list[k] end
-		local rc = sys.call(string.format("nft %s element inet fw4 %s { %s } 2>/dev/null",
-			verb, setname, table.concat(part, ", ")))
-		if rc ~= 0 then
-			for _, one in ipairs(part) do
-				sys.call(string.format("nft %s element inet fw4 %s { %s } 2>/dev/null",
-					verb, setname, one))
-			end
-		end
-		i = j + 1
-	end
-end
 
-local function set_exists(name)
-	return sys.call("nft list set inet fw4 " .. name .. " >/dev/null 2>&1") == 0
-end
 
 -- Rewrite the contents of the two sets from state without touching the
 -- ruleset: flushing elements keeps the set object, its chains and every
 -- other firewall rule exactly where they are.
-local function rebuild_sets()
-	local ips = load_ipstate()
-	local v4, v6 = {}, {}
-	for ip in pairs(ips) do
-		if ip:find(":") then v6[#v6 + 1] = ip else v4[#v4 + 1] = ip end
-	end
-	sys.call("nft flush set inet fw4 blocked_ip4 2>/dev/null")
-	sys.call("nft flush set inet fw4 blocked_ip6 2>/dev/null")
-	nft_chunk("blocked_ip4", "add", v4)
-	nft_chunk("blocked_ip6", "add", v6)
-	return #v4 + #v6
-end
 
 local function apply_ip_delta(delta)
 	local function split(list)
@@ -1802,7 +1776,11 @@ methods.domaintoggle = domm.toggle
 -- 订阅源
 feedm = require "languard.feeds"
 feedm.setup({
-	FEEDS_FILE = FEEDS_FILE, MAX_FEED_IPS = MAX_FEED_IPS, MAX_DOMAINS = MAX_DOMAINS,
+	FEEDS_FILE = FEEDS_FILE, IPSTATE_FILE = IPSTATE_FILE,
+	MAX_FEED_IPS = MAX_FEED_IPS, MAX_DOMAINS = MAX_DOMAINS,
+	pb_field = function(d, i) return pb_field(d, i) end,
+	methods = methods,
+	reload_firewall = function() return reload_firewall() end,
 	normalize_ip = function(v) return normalize_ip(v) end,
 	is_domain_token = function(v) return is_domain_token(v) end,
 	is_trusted_proxy = function(v) return is_trusted_proxy(v) end,
@@ -1850,6 +1828,8 @@ appm.setup({
 	save_state = function(v) return save_state(v) end,
 	notify_event = function(...) return notify_event(...) end,
 	read_all = function(p) return read_all(p) end,
+	trim = function(v) return trim(v) end,
+	sig_usable = function(a, b) return sig_usable(a, b) end,
 	ok = function(t) return ok(t) end,
 	err = function(m) return err(m) end,
 	sample_running = function() return sample_running() end,
@@ -1940,6 +1920,15 @@ function render_rules(state)
 		end
 		lines[#lines + 1] = "chain user_ip_input {"
 		lines[#lines + 1] = "\ttype filter hook input priority -1; policy accept;"
+		-- 逐 IP 计数只给手工与自动封禁:订阅条目动辄上万,一条规则一个
+		-- 地址会让规则集体积失控。订阅行在界面上显示为空。
+		for ip, meta in pairs(ips) do
+			if meta.source ~= "feed" then
+				local fam = ip:find(":") and "ip6" or "ip"
+				lines[#lines + 1] = string.format(
+					"\t%s saddr %s counter drop comment \"languard-ip:%s\"", fam, ip, ip)
+			end
+		end
 		if #v4 > 0 then
 			lines[#lines + 1] = "\tip saddr @blocked_ip4 counter drop comment \"languard-ip-in\""
 		end
@@ -1971,41 +1960,10 @@ end
 
 -- fw4 redefines these objects from RULE_FILE; a stale object left behind by a
 -- failed reload makes every later reload fail with "File exists".
-local function unload_rules()
-	-- Order matters: nft refuses to delete a set while a chain still has a
-	-- rule pointing at it ("Resource busy"), and a set that survives keeps
-	-- every element ever added to it. Deleting the chains first is what makes
-	-- an unblock actually take effect.
-	sys.call("nft delete chain inet fw4 user_ip_input >/dev/null 2>&1; " ..
-	         "nft delete chain inet fw4 user_ip_forward >/dev/null 2>&1; " ..
-	         "nft delete chain inet fw4 user_pre_input >/dev/null 2>&1; " ..
-	         "nft delete chain inet fw4 user_pre_forward >/dev/null 2>&1; " ..
-	         "nft delete set inet fw4 blocked_ip4 >/dev/null 2>&1; " ..
-	         "nft delete set inet fw4 blocked_ip6 >/dev/null 2>&1")
-end
 
 -- Runtime element updates avoid the ~6 s fw4 reload. Returns true when the
 -- set already exists in the running ruleset and the element was applied.
-local function set_element_live(ip, add)
-	local setname = ip:find(":") and "blocked_ip6" or "blocked_ip4"
-	local verb = add and "add" or "delete"
-	if sys.call(string.format("nft %s element inet fw4 %s { %s } 2>/dev/null",
-	                          verb, setname, ip)) == 0 then
-		return true
-	end
-	return false
-end
 
-function reload_firewall()
-	unload_rules()
-	local ok_ = sys.call("fw4 reload >/dev/null 2>&1") == 0
-	if not ok_ then
-		-- second attempt: drop the objects we own and retry once
-		unload_rules()
-		sys.call("fw4 reload >/dev/null 2>&1")
-	end
-	return ok_
-end
 
 
 
@@ -2553,7 +2511,8 @@ function methods.ipadd(ip, note, source, fast, evidence)
 	if dup then return ok({ ip = norm, duplicate = true }) end
 	if not wrote then return err("cannot write state") end
 	render_rules(load_state())
-	if st[norm].source == "auto" then
+	local src = (source ~= "" and source) or "manual"
+	if src == "auto" then
 		notify_event("auto_block", "Blocked " .. norm, tostring(note ~= "" and note or "automatic"))
 	end
 	if fast == true or fast == "1" then
