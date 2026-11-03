@@ -1,11 +1,19 @@
-refactor: 拆出 system.lua,备份恢复独立
+refactor: 拆出 apps.lua,Phase 1 完成
 
-导出/导入原本混在方法表里,还带着 2MB 应用库的具体文件清单。现在清单由
-调用方注入,模块自己不认识任何状态文件:
+应用识别库、流量统计、QoS、抓包采样的 15 个对外方法移入
+languard/apps.lua。热路径(IDX 索引、conntrack 采集、指纹扫描)留在主文件,
+由 setup 注入。
 
-  exportconfig / exportfile   打码令牌、随机文件名、清旧备份、chmod
-  importconfig / importfile   *** 保留原令牌、逐段写回、重载规则
+依赖用 D.xxx 前缀注入,常量(APPSTAT_FILE / QOS_FILE / SAMPLE_*)同样
+经 deps 传入,模块不持有任何路径。
 
-依赖用闭包延迟解析 —— 挂载时 read_all 还没赋值,直接传会拿到 nil。
+主文件从 5484 行降到 4877 行,共 6 个模块:
 
-实测:导出 19 段 2612761 字节,下载 200,导入回 19 段,设备 50 台。
+  json.lua      90   状态文件读写与锁
+  nft.lua      105   内核侧写入口
+  net.lua      190   地址/租约/邻居解析
+  devices.lua  120   9 个设备状态文件
+  system.lua   120   备份恢复
+  apps.lua     390   应用/流量/QoS/采样接口
+
+实测:14 个 ubus 接口全部正常,健康检查 OK,设备 50 台,已知 56 条。
