@@ -1,19 +1,13 @@
-refactor: 拆出 apps.lua,Phase 1 完成
+refactor: 前端拆出 common.js(Phase 2 之一)
 
-应用识别库、流量统计、QoS、抓包采样的 15 个对外方法移入
-languard/apps.lua。热路径(IDX 索引、conntrack 采集、指纹扫描)留在主文件,
-由 setup 注入。
+3600 行的视图文件里,前三块与页面结构无关:91 个 RPC 声明、305 行样式表、
+9 个格式化函数。它们搬进 languard/common.js,视图改为 require 后按名取用。
 
-依赖用 D.xxx 前缀注入,常量(APPSTAT_FILE / QOS_FILE / SAMPLE_*)同样
-经 deps 传入,模块不持有任何路径。
+  视图  3647 → 3164 行
+  common 675 行(含 91 个 rpc.declare 与全部 cb-* 样式)
 
-主文件从 5484 行降到 4877 行,共 6 个模块:
+静态校验:视图引用 common.* 共 91 处,common 导出 90 个,全部命中
+(唯一"缺失"是注释里的 common.js 字样)。两份文件语法解析通过。
+两个文件均以 200 提供。
 
-  json.lua      90   状态文件读写与锁
-  nft.lua      105   内核侧写入口
-  net.lua      190   地址/租约/邻居解析
-  devices.lua  120   9 个设备状态文件
-  system.lua   120   备份恢复
-  apps.lua     390   应用/流量/QoS/采样接口
-
-实测:14 个 ubus 接口全部正常,健康检查 OK,设备 50 台,已知 56 条。
+真机视觉验证需要登录 LuCI,这一步留给用户刷新确认。
