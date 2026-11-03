@@ -51,7 +51,7 @@ local _known_cache
 local ok, err, read_all
 local is_trusted_proxy, extract_forwarded
 local render_rules, reload_firewall, nft_chunk, set_exists, rebuild_sets, unload_rules, set_element_live
-local split_macs, load_ports
+local split_macs
 local notify_event
 local load_domains, save_domains, is_domain_token, apply_domains
 local collect_devices
@@ -86,61 +86,36 @@ parse_leases = netm.parse_leases
 parse_neigh = netm.parse_neigh
 parse_static_hosts = netm.parse_static_hosts
 
+-- 设备状态文件的所有者
+devm = require "languard.devices"
+devm.setup({
+	state = STATE_FILE, names = NAME_FILE, whitelist = WL_FILE,
+	groups = GROUPS_FILE, ports = PORTS_FILE, schedule = SCHED_FILE,
+	aliases = ALIAS_FILE, panic = PANIC_FILE,
+})
+load_state = devm.load_state
+save_state = devm.save_state
+load_names = devm.load_names
+save_names = devm.save_names
+remember_name = devm.remember_name
+load_wl = devm.load_wl
+wl_has = devm.wl_has
+load_groups = devm.load_groups
+load_ports = devm.load_ports
+load_sched = devm.load_sched
+load_aliases = devm.load_aliases
+load_panic = devm.load_panic
+
 
 local function trim(s)
 	return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
 
-local function load_state()
-	local f = io.open(STATE_FILE, "r")
-	if not f then return {} end
-	local raw = f:read("*a")
-	f:close()
-	local parsed = jsonc.parse(raw)
-	if type(parsed) ~= "table" then return {} end
-	return parsed
-end
 
-local function save_state(state)
-	fs.mkdirr(STATE_DIR)
-	local f = io.open(STATE_FILE, "w")
-	if not f then return false end
-	local s = jsonc.stringify(state)
-	-- jsonc renders an empty table as [], which would break the next parse as a map
-	if s == "[]" or s == "{}" then s = "{}" end
-	f:write(s)
-	f:close()
-	return true
-end
 
-local function load_names()
-	local f = io.open(NAME_FILE, "r")
-	if not f then return {} end
-	local raw = f:read("*a")
-	f:close()
-	local parsed = jsonc.parse(raw)
-	if type(parsed) ~= "table" then return {} end
-	return parsed
-end
 
-local function save_names(names)
-	fs.mkdirr(STATE_DIR)
-	local f = io.open(NAME_FILE, "w")
-	if not f then return false end
-	local s = jsonc.stringify(names)
-	if s == "[]" then s = "{}" end
-	f:write(s)
-	f:close()
-	return true
-end
 
-local function remember_name(mac, name)
-	if not name or name == "" then return end
-	local names = load_names()
-	names[mac] = name
-	save_names(names)
-end
 
 local function load_ipstate()
 	local f = io.open(IPSTATE_FILE, "r")
@@ -381,21 +356,9 @@ end
 -- Whitelist, panic mode, trends, port templates, feeds, export/import
 -- ============================================================
 
-local function load_wl()
-	local w = load_json_map(WL_FILE, function() return { macs = {} } end)
-	if type(w.macs) ~= "table" then w.macs = {} end
-	return w
-end
 
 -- collect_devices 每台设备都调一次,每次都重新读盘解析太浪费。
 -- 用全局而不是 local:顶层已经贴着 200 个局部变量的上限。
-local function wl_has(mac)
-	if not WL_CACHE then
-		WL_CACHE = {}
-		for _, m in ipairs(load_wl().macs) do WL_CACHE[m] = true end
-	end
-	return WL_CACHE[mac] == true
-end
 
 function methods.knownadd(mac)
 	mac = normalize_mac(mac)
@@ -480,10 +443,6 @@ function methods.wldel(mac)
 end
 
 -- ---- panic mode: block every device that is not trusted -----------------
-local function load_panic()
-	local p = load_json_map(PANIC_FILE, function() return { on = false } end)
-	return p
-end
 
 function methods.blockaudit(limit)
 	local n = tonumber(limit) or 200
@@ -2802,7 +2761,6 @@ function methods.importconfig(payload)
 	return ok({ imported = n })
 end
 
-local load_ports
 
 function render_rules(state)
 	local lines = {
@@ -2955,9 +2913,6 @@ end
 -- A container or VM on a NAS answers ARP with its own generated MAC, so the
 -- same box shows up twice and looks like an address conflict. An alias maps
 -- such a MAC onto the device it belongs to; the row then folds into one.
-local function load_aliases()
-	return load_json_map(ALIAS_FILE, function() return {} end)
-end
 
 collect_devices = function()
 	local state = load_state()
@@ -3933,17 +3888,6 @@ end
 -- starts, so "Mon-Fri 21:00-07:00" also covers Saturday morning.
 -- ============================================================
 
-local function load_sched()
-	local f = io.open(SCHED_FILE, "r")
-	if not f then return { seq = 0, rules = {} } end
-	local raw = f:read("*a")
-	f:close()
-	local p = jsonc.parse(raw)
-	if type(p) ~= "table" then return { seq = 0, rules = {} } end
-	p.seq = tonumber(p.seq) or 0
-	if type(p.rules) ~= "table" then p.rules = {} end
-	return p
-end
 
 local function save_sched(sc)
 	fs.mkdirr(STATE_DIR)
@@ -4336,15 +4280,6 @@ function update_ipstate(fn)
 	return r
 end
 
-local function load_groups()
-	local g = load_json_map(GROUPS_FILE, function() return { seq = 0, groups = {} } end)
-	g.seq = tonumber(g.seq) or 0
-	if type(g.groups) ~= "table" then g.groups = {} end
-	for _, grp in ipairs(g.groups) do
-		if type(grp.macs) ~= "table" then grp.macs = {} end
-	end
-	return g
-end
 
 function split_macs(v)
 	local out = {}
@@ -4443,12 +4378,6 @@ function methods.curfew(id, minutes)
 end
 
 -- ---- port restrictions -------------------------------------------------
-function load_ports()
-	local p = load_json_map(PORTS_FILE, function() return { seq = 0, rules = {} } end)
-	p.seq = tonumber(p.seq) or 0
-	if type(p.rules) ~= "table" then p.rules = {} end
-	return p
-end
 
 function methods.portlist()
 	local p = load_ports()

@@ -1,16 +1,16 @@
-refactor: 拆出 json / nft / net 三个模块(Phase 1 之一)
+refactor: 拆出 devices.lua,设备状态收归一处
 
-主文件 5484 行里,底层三件事各自独立且无共享可变状态,先按状态归属拆开:
+九个设备状态文件原本散在 5300 行里, load/save 各写一遍。现在集中在
+languard/devices.lua,按文件分族:
 
-  languard/json.lua  状态文件的唯一读写入口:原子写、目录锁、shell 转义
-  languard/nft.lua   内核侧唯一写入口:规则文件、集合元素、fw4 重载
-  languard/net.lua   纯解析:MAC/IP 规范化、租约、邻居表、静态绑定
+  blocked.json  names.json  known_devices.json  whitelist.json
+  groups.json   ports.json  schedule.json       aliases.json  panic.json
 
-每个模块用 setup() 接收路径与回调,自己不持有配置。主文件以全局名挂回
-原来的函数名,调用点一处未改。
+每个函数族只读自己那份文件,白名单缓存也在模块内。主文件以全局名挂回,
+调用点未改。
 
-顺带:net.lua 的 cidr_match 改用除法而不是 bit 库——Lua 5.1 没有位运算符,
-部分固件不带 bit。
+顺带修掉一个遮蔽:文件中段还留着一句 local load_ports,把全局赋值遮蔽成
+nil,导致 render_rules 和端口相关接口全部报 "attempt to call upvalue"。
 
-实测:三个模块独立加载通过;整合后健康检查 OK、设备列表 50 台、
-封禁解封正常、并发 5 次写入全部落盘。
+实测:健康 OK,list/wllist/grouplist/portlist/schedlist/knownlist/
+panicstate/ipflush 全部正常返回,设备 50 台,已知设备 56 条。
