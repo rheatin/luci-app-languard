@@ -1,13 +1,13 @@
-refactor: 拆出 feeds.lua
+refactor: 方法分发表化,去掉 80 分支的 elseif 链
 
-订阅源的三种形态(IP 列表、域名列表、geosite 分类)、下载解析、整源替换、
-到期刷新全部移入 languard/feeds.lua。它拥有 feeds.json 的写入权,并通过
-注入的锁与 ipstate 读写与 tick 协作。
+原来每个方法一条 elseif,92 条分支占了 250 行。现在是一张 HANDLERS 表:
 
-主文件 4629 → 4261 行。九个模块合计 1799 行:
+  list = { f = function() return methods.list(req.probe) end, arrays = { "devices" } },
 
-  json 66 · nft 85 · net 177 · devices 114 · system 129
-  apps 387 · notify 185 · domains 191 · feeds 465
+调用、数组字段、未找到错误都走同一条路径,新增方法只需加一行。
+表放在 req 解析之后——闭包捕获的是局部变量,提前定义会抓到 nil 全局。
 
-实测:tick 正常返回,健康 OK,list/appstats/domainlist/feedlist/notifyget/
-qoslist 全部通过。
+主文件 4261 → 4123 行。
+
+实测:26 个只读接口全部通过,写操作(ipadd/ipdel/domainadd/domaindel/
+notifyadd/notifydel)与 tick 均正常。
