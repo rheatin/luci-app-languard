@@ -204,6 +204,9 @@ var STYLE = `
 .cb-badge-blocked { background: var(--danger-surface); color: var(--danger); }
 .cb-input { width: 100%; box-sizing: border-box; padding: .35rem .6rem; border-radius: .35rem;
 	border: 1px solid var(--hairline); background: transparent; color: inherit; font-size: .85rem; }
+.cb-geo { display: inline-block; padding: 0 .4rem; border-radius: .25rem; font-size: .7rem;
+	font-weight: 600; letter-spacing: .04em; line-height: 1.5; white-space: nowrap;
+	background: var(--accent); color: #fff; opacity: .9; }
 .cb-tag { display: inline-block; padding: 0 .4rem; border-radius: .25rem;
 	font-size: .7rem; font-family: var(--font-mono); letter-spacing: .02em;
 	background: var(--hover-faint); color: var(--text-muted); }
@@ -2237,11 +2240,9 @@ return view.extend({
 			// the auth method is its own column now; drop it from the detail text
 			var reason = String(e.detail || '').replace(/^auth=\w+\s*/, '').trim();
 
-			// 国家码太省了,写国家名;城市和运营商留在 title 里
-			var gp = e.geo ? String(e.geo).split('|') : [];
-			var gname = (gp[0] || '').trim() || (gp[4] || '').trim();
+			var cc = e.geo ? (String(e.geo).split('|')[4] || '').trim() : '';
 			var geoCell = e.geo
-				? E('span', { 'class': 'cb-tag', 'title': fmtGeo(e.geo), 'style': 'white-space:nowrap' }, gname || '?')
+				? E('span', { 'class': 'cb-geo', 'title': fmtGeo(e.geo) }, cc || '?')
 				: '';
 
 			var key = e.ts + '|' + e.ip + '|' + e.kind + '|' + e.result;
