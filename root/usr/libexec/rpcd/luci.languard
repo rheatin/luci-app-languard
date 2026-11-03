@@ -48,10 +48,9 @@ local NEIGH_CMD = "ip -4 neigh show dev br-lan 2>/dev/null"
 
 local methods = {}
 local _known_cache
-local ok, err, read_all, shq
-local parse_leases, parse_neigh, parse_static_hosts
+local ok, err, read_all
 local is_trusted_proxy, extract_forwarded
-local render_rules, reload_firewall, load_json_map, save_json_map
+local render_rules, reload_firewall, nft_chunk, set_exists, rebuild_sets, unload_rules, set_element_live
 local split_macs, load_ports
 local notify_event
 local load_domains, save_domains, is_domain_token, apply_domains
@@ -61,18 +60,37 @@ local load_apps, save_apps
 -- methods.ipdel 在定义处就引用这两个,必须先声明,否则解析成全局 nil
 local load_scan, save_scan
 
+-- 三个模块接管底层:状态文件读写、内核规则、地址解析。
+-- 用全局名,顶层已经贴着 200 个局部变量的上限。
+jsonm = require "languard.json"
+jsonm.setup(STATE_DIR)
+shq = jsonm.shq
+load_json_map = jsonm.load
+save_json_map = jsonm.save
+lock_acquire = jsonm.lock
+lock_release = jsonm.unlock
+
+nftm = require "languard.nft"
+nftm.setup({ rule_file = RULE_FILE, load_ips = function() return load_ipstate() end })
+
+netm = require "languard.net"
+netm.setup({ lease_file = LEASE_FILE, neigh_cmd = NEIGH_CMD })
+
+normalize_mac = netm.normalize_mac
+normalize_ip = netm.normalize_ip
+is_local_mac = netm.is_local_mac
+ipv4_to_int = netm.ipv4_to_int
+cidr_match = netm.cidr_match
+is_private_ip = netm.is_private_ip
+parse_leases = netm.parse_leases
+parse_neigh = netm.parse_neigh
+parse_static_hosts = netm.parse_static_hosts
+
 
 local function trim(s)
 	return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
-local function normalize_mac(mac)
-	if not mac then return nil end
-	mac = mac:lower():gsub("[^0-9a-f]", "")
-	if #mac ~= 12 then return nil end
-	return mac:sub(1, 2) .. ":" .. mac:sub(3, 4) .. ":" .. mac:sub(5, 6) .. ":" ..
-	       mac:sub(7, 8) .. ":" .. mac:sub(9, 10) .. ":" .. mac:sub(11, 12)
-end
 
 local function load_state()
 	local f = io.open(STATE_FILE, "r")
@@ -146,59 +164,6 @@ local function save_ipstate(st)
 end
 
 -- "1.2.3.4" or "1.2.3.0/24" -> normalized form, or nil
-local function normalize_ip(v)
-	-- 嵌套在函数内部:顶层已经有 200 个局部变量的上限
-	local function valid_v6(x)
-		if not x:find(":", 1, true) then return false end
-		local dc, pos = 0, 1
-		while true do
-			local i = x:find("::", pos, true)
-			if not i then break end
-			dc = dc + 1
-			if dc > 1 then return false end
-			pos = i + 2
-		end
-		local groups = 0
-		for g in (x .. ":"):gmatch("([^:]*):") do
-			if g ~= "" then
-				if #g > 4 or g:find("[^0-9a-fA-F]") then return false end
-				groups = groups + 1
-			end
-		end
-		if dc > 0 then return groups <= 7 end
-		return groups == 8
-	end
-
-	if not v then return nil end
-	v = trim(v)
-	if v == "" or #v > 43 then return nil end
-	local a, b, c, d, plen = v:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)/(%d+)$")
-	if a then
-		a, b, c, d, plen = tonumber(a), tonumber(b), tonumber(c), tonumber(d), tonumber(plen)
-		if not (a and b and c and d and plen) then return nil end
-		if a > 255 or b > 255 or c > 255 or d > 255 or plen > 32 then return nil end
-		return string.format("%d.%d.%d.%d/%d", a, b, c, d, plen)
-	end
-	a, b, c, d = v:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
-	if a then
-		a, b, c, d = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
-		if not (a and b and c and d) then return nil end
-		if a > 255 or b > 255 or c > 255 or d > 255 then return nil end
-		return string.format("%d.%d.%d.%d", a, b, c, d)
-	end
-	-- IPv6 literal or prefix. 必须在这里判死:一条 nft 拒收的地址会让整个
-	-- fw4 reload 失败,而失败前已经卸载了我们自己的链,封禁会静默消失。
-	local v6, plen6 = v:match("^([0-9a-fA-F:]+)/(%d+)$")
-	if v6 then
-		plen6 = tonumber(plen6)
-		if plen6 and plen6 <= 128 and valid_v6(v6) then
-			return v6:lower() .. "/" .. plen6
-		end
-		return nil
-	end
-	if valid_v6(v) then return v:lower() end
-	return nil
-end
 
 local function load_autocfg()
 	local f = io.open(AUTOCFG_FILE, "r")
@@ -322,10 +287,6 @@ local OUI_TABLE = {
 	["1c:20:19"] = "OPPO", ["00:0c:43"] = "MediaTek", ["00:10:18"] = "Broadcom",
 }
 
-local function is_local_mac(mac)
-	local b = tonumber(mac:sub(1, 2), 16)
-	return b ~= nil and (b % 4) >= 2
-end
 
 local function vendor_cached(mac)
 	local prefix = mac:sub(1, 8)
@@ -1493,22 +1454,7 @@ save_apps = function(d)
 end
 
 -- Lua 5.1 has no bitwise operators; arithmetic on the octets is enough here
-local function ipv4_to_int(ip)
-	local a, b, c, d = ip:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
-	if not a then return nil end
-	return ((tonumber(a) * 256 + tonumber(b)) * 256 + tonumber(c)) * 256 + tonumber(d)
-end
 
-local function cidr_match(ip, cidr)
-	local net, bits = cidr:match("^([%d%.]+)/(%d+)$")
-	if not net then net, bits = cidr, 32 end
-	bits = tonumber(bits)
-	local a, b = ipv4_to_int(ip), ipv4_to_int(net)
-	if not a or not b then return false end
-	if bits <= 0 then return true end
-	local size = 2 ^ (32 - bits)
-	return math.floor(a / size) == math.floor(b / size)
-end
 
 local function port_in(spec, port)
 	if not spec or spec == "" then return false end
@@ -2993,33 +2939,7 @@ function reload_firewall()
 	return ok_
 end
 
-function parse_leases()
-	local map = {}
-	local f = io.open(LEASE_FILE, "r")
-	if not f then return map end
-	for line in f:lines() do
-		local exp, mac, ip, host = line:match("^(%d+)%s+(%S+)%s+(%S+)%s+(%S+)")
-		if mac then
-			map[mac:lower()] = { ip = ip, host = (host ~= "*" and host or nil), expires = tonumber(exp) }
-		end
-	end
-	f:close()
-	return map
-end
 
-function parse_neigh()
-	local map = {}
-	local fh = io.popen(NEIGH_CMD, "r")
-	if not fh then return map end
-	for line in fh:lines() do
-		local ip, mac = line:match("^(%d+%.%d+%.%d+%.%d+)%s+lladdr%s+(%S+)")
-		if ip and mac then
-			map[mac:lower()] = ip
-		end
-	end
-	fh:close()
-	return map
-end
 
 -- Liveness: ping sweep in parallel, then re-read the neighbour table.
 -- Covers powered-but-quiet IoT devices that never appear REACHABLE.
@@ -3031,26 +2951,6 @@ local function probe_online()
 	return parse_neigh()
 end
 
-function parse_static_hosts()
-	local map = {}
-	local out = sys.exec("uci -q show dhcp 2>/dev/null") or ""
-	local cur = {}
-	for line in out:gmatch("[^\n]+") do
-		local idx, key, val = line:match("^dhcp%.@host%[(%d+)%]%.(%w+)='(.*)'$")
-		if idx then
-			cur[idx] = cur[idx] or {}
-			cur[idx][key] = val
-		end
-	end
-	for _, h in pairs(cur) do
-		if h.mac and h.ip then
-			for mac in h.mac:gmatch("%S+") do
-				map[mac:lower()] = { ip = h.ip, host = h.name }
-			end
-		end
-	end
-	return map
-end
 
 -- A container or VM on a NAS answers ARP with its own generated MAC, so the
 -- same box shows up twice and looks like an address conflict. An alias maps
@@ -3282,16 +3182,6 @@ local GEO_INDEX = 14
 local _geo_db, _geo_path
 local _geo_cache = {}
 
-local function is_private_ip(ip)
-	local a, b = ip:match("^(%d+)%.(%d+)%.")
-	a, b = tonumber(a), tonumber(b)
-	if not a then return true end
-	return a == 10 or a == 127 or a == 0
-		or (a == 172 and b >= 16 and b <= 31)
-		or (a == 192 and b == 168)
-		or (a == 169 and b == 254)
-		or (a == 100 and b >= 64 and b <= 127)
-end
 
 local function geo_open()
 	if _geo_db then return _geo_db end
