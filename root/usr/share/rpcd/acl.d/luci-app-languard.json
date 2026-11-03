@@ -99,7 +99,8 @@
 					"domaintogglelog",
 					"tickset",
 					"importfile",
-					"fix"
+					"fix",
+					"ensure_dnsmasq"
 				]
 			},
 			"file": {

@@ -426,11 +426,14 @@ local function load_wl()
 	return w
 end
 
+-- collect_devices 每台设备都调一次,每次都重新读盘解析太浪费。
+-- 用全局而不是 local:顶层已经贴着 200 个局部变量的上限。
 local function wl_has(mac)
-	for _, m in ipairs(load_wl().macs) do
-		if m == mac then return true end
+	if not WL_CACHE then
+		WL_CACHE = {}
+		for _, m in ipairs(load_wl().macs) do WL_CACHE[m] = true end
 	end
-	return false
+	return WL_CACHE[mac] == true
 end
 
 function methods.knownadd(mac)
@@ -490,6 +493,7 @@ function methods.wladd(mac)
 	local w = load_wl()
 	if not wl_has(mac) then w.macs[#w.macs + 1] = mac end
 	save_json_map(WL_FILE, w)
+	WL_CACHE = nil
 	-- a trusted device must not stay blocked
 	local st = load_state()
 	if st[mac] then
@@ -510,6 +514,7 @@ function methods.wldel(mac)
 	for _, m in ipairs(w.macs) do if m ~= mac then keep[#keep + 1] = m end end
 	w.macs = keep
 	save_json_map(WL_FILE, w)
+	WL_CACHE = nil
 	return ok({ count = #keep })
 end
 
@@ -1034,18 +1039,23 @@ local function ensure_dnsmasq_entry()
 	return true
 end
 
+-- 只写 hosts 文件并 HUP。写 uci 条目属于启动期基础设施,放在 sync 里:
+-- 定时刷新若发现条目丢失而重启 dnsmasq,DHCP 会被打断。
 apply_domains = function()
 	render_domain_hosts()
-	local added = ensure_dnsmasq_entry()
-	if added then
-		-- the config file gained an addn-hosts line; SIGHUP does not re-read
-		-- it, so this one time needs a real restart
+	sys.call("kill -HUP $(pidof dnsmasq) 2>/dev/null")
+end
+
+-- 启动路径专用:确保 addnhosts 里登记了我们的 hosts 文件,缺了就补上并重启
+-- 一次 dnsmasq(HUP 读不到新条目,这一步只能重启)。
+function methods.ensure_dnsmasq()
+	render_domain_hosts()
+	if ensure_dnsmasq_entry() then
 		sys.call("/etc/init.d/dnsmasq restart >/dev/null 2>&1")
-	else
-		-- the path is already configured: a HUP re-reads the hosts files and
-		-- clears the cache, leaving DHCP and existing flows alone
-		sys.call("kill -HUP $(pidof dnsmasq) 2>/dev/null")
+		return ok({ restarted = true })
 	end
+	sys.call("kill -HUP $(pidof dnsmasq) 2>/dev/null")
+	return ok({ restarted = false })
 end
 
 -- dnsmasq answers blocked names with 0.0.0.0, so a hit is only visible in its
@@ -1328,17 +1338,20 @@ function methods.feedrefresh(id)
 		return ok({ added = n, merged = n, total = n })
 	end
 
+	local lk = lock_acquire(IPSTATE_FILE, 10)
 	local ips = load_ipstate()
 	local delta, why = fetch_feed(fd, ips, os.time())
 	if not delta then
 		fd.last_error = why
 		save_json_map(FEEDS_FILE, f)
+		if lk then lock_release(IPSTATE_FILE) end
 		return err(why)
 	end
 
 	local dch = merge_feed_domains(fd, delta.domains, os.time())
 	save_json_map(FEEDS_FILE, f)
 	save_ipstate(ips)
+	if lk then lock_release(IPSTATE_FILE) end
 	render_rules(load_state())
 	apply_ip_delta(delta)
 	if dch > 0 then apply_domains() end
@@ -1737,7 +1750,7 @@ local function collect_clash_stats(now, apps, st, seen)
 	local secret = clash_secret()
 	if not secret then return 0 end
 	local prefix = lan_prefix() or "192.168."
-	local fakeip = fake_ip_index(prefix)
+	-- fake_ip_index 在下面按需调用一次;这里预先算一份只会重复解析
 	local raw = sys.exec(string.format(
 		"curl -s -m 5 -H %s http://127.0.0.1:9090/connections 2>/dev/null",
 		shq("Authorization: Bearer " .. secret)))
@@ -2351,11 +2364,12 @@ end
 
 function methods.qoslist()
 	local d = load_qos()
+	local ips = load_appips()
 	local out = {}
 	for _, r in ipairs(d.rules) do
 		out[#out + 1] = { id = r.id, ip = r.ip, app = r.app, dscp = r.dscp,
 		                  action = r.action or "dscp",
-		                  ips = (load_appips()[r.app] or {}) and #(load_appips()[r.app] or {}) or 0 }
+		                  ips = #(ips[r.app] or {}) }
 	end
 	return { success = true, running = true, rules = out, levels = QOS_LEVELS }
 end
@@ -2706,6 +2720,7 @@ local function refresh_due_feeds(now)
 		return { id = due.id, name = due.name, app = true, ok = r and r.success or false }
 	end
 
+	local lk = lock_acquire(IPSTATE_FILE, 10)
 	local ips = load_ipstate()
 	local delta, why = fetch_feed(due, ips, now)
 	if not delta then
@@ -2713,6 +2728,7 @@ local function refresh_due_feeds(now)
 		-- do not hammer a broken source on every tick
 		due.last = now
 		save_json_map(FEEDS_FILE, f)
+		if lk then lock_release(IPSTATE_FILE) end
 		notify_event("feed_fail", "Feed failed: " .. due.name, tostring(why))
 		return { id = due.id, name = due.name, error = why }
 	end
@@ -2720,6 +2736,7 @@ local function refresh_due_feeds(now)
 	local dch = merge_feed_domains(due, delta.domains, now)
 	save_json_map(FEEDS_FILE, f)
 	save_ipstate(ips)
+	if lk then lock_release(IPSTATE_FILE) end
 	render_rules(load_state())
 	apply_ip_delta(delta)
 	if dch > 0 then apply_domains() end
@@ -3231,10 +3248,18 @@ local function ip_counters()
 			for _, e in ipairs(rule.expr) do
 				if e.counter then
 					local k = rule.comment
+					-- 注释形如 languard-ip:<addr> 时同时记到该地址名下
+					local addr = k:match("^languard%-ip6?:(.+)$")
 					local c = map[k] or { packets = 0, bytes = 0 }
 					c.packets = c.packets + (e.counter.packets or 0)
 					c.bytes = c.bytes + (e.counter.bytes or 0)
 					map[k] = c
+					if addr then
+						local d = map[addr] or { packets = 0, bytes = 0 }
+						d.packets = d.packets + (e.counter.packets or 0)
+						d.bytes = d.bytes + (e.counter.bytes or 0)
+						map[addr] = d
+					end
 				end
 			end
 		end
@@ -3506,8 +3531,9 @@ function methods.iplist(limit, cat)
 		counts[c] = (counts[c] or 0) + 1
 		total = total + 1
 		if cat == "" or cat == c then
-		local inb = ctr["languard-ip-in"] or ctr["languard-ip6-in"] or { packets = 0, bytes = 0 }
-		local outb = ctr["languard-ip-out"] or ctr["languard-ip6-out"] or { packets = 0, bytes = 0 }
+		-- 逐 IP 规则优先;订阅条目没有单独计数,如实留空而不是拿全局数冒充
+		local own = ctr[ip]
+		local feed = meta.source == "feed"
 		list[#list + 1] = {
 			ip = ip,
 			note = meta.note or "",
@@ -3516,8 +3542,9 @@ function methods.iplist(limit, cat)
 			source = meta.source or "manual",
 			feed = meta.feed,
 			evidence = meta.evidence,
-			drop_packets = inb.packets + outb.packets,
-			drop_bytes = inb.bytes + outb.bytes,
+			drop_packets = own and own.packets or nil,
+			drop_bytes = own and own.bytes or nil,
+			per_ip = not feed,
 			category = c,
 			feed_name = meta.feed and feedname[tostring(meta.feed)] or nil,
 		}
@@ -3558,15 +3585,18 @@ function methods.ipadd(ip, note, source, fast, evidence)
 		return err("refusing to block a trusted proxy: it would cut every " ..
 		           "service behind it")
 	end
-	local st = load_ipstate()
-	if st[norm] ~= nil then return ok({ ip = norm, duplicate = true }) end
-	st[norm] = {
-		since = os.time(),
-		note = (note ~= "" and note) or nil,
-		source = (source ~= "" and source) or "manual",
-		evidence = (evidence ~= "" and evidence) or nil,
-	}
-	if not save_ipstate(st) then return err("cannot write state") end
+	local dup = false
+	local wrote = update_ipstate(function(st)
+		if st[norm] ~= nil then dup = true return end
+		st[norm] = {
+			since = os.time(),
+			note = (note ~= "" and note) or nil,
+			source = (source ~= "" and source) or "manual",
+			evidence = (evidence ~= "" and evidence) or nil,
+		}
+	end)
+	if dup then return ok({ ip = norm, duplicate = true }) end
+	if not wrote then return err("cannot write state") end
 	render_rules(load_state())
 	if st[norm].source == "auto" then
 		notify_event("auto_block", "Blocked " .. norm, tostring(note ~= "" and note or "automatic"))
@@ -3583,10 +3613,11 @@ end
 function methods.ipdel(ip)
 	local norm = normalize_ip(ip)
 	if not norm then return err("invalid IP address or CIDR") end
-	local st = load_ipstate()
-	if st[norm] == nil then return err("not blocked") end
-	st[norm] = nil
-	save_ipstate(st)
+	local found = false
+	update_ipstate(function(st)
+		if st[norm] ~= nil then found = true st[norm] = nil end
+	end)
+	if not found then return err("not blocked") end
 	render_rules(load_state())
 	-- the live delete only works when the set is present; otherwise rebuild,
 	-- or the address stays blocked despite having been released
@@ -3646,10 +3677,11 @@ function methods.proxyadd(ip)
 	if not save_json_map(PROXY_FILE, p) then return err("cannot write state") end
 	_proxy_cache = nil
 	-- an address that just became a proxy must not stay blocked
-	local st = load_ipstate()
-	if st[norm] then
-		st[norm] = nil
-		save_ipstate(st)
+	local had = false
+	update_ipstate(function(st)
+		if st[norm] then had = true st[norm] = nil end
+	end)
+	if had then
 		render_rules(load_state())
 		if not set_element_live(norm, false) then reload_firewall() end
 	end
@@ -3957,6 +3989,8 @@ end
 
 -- Called from the init script at boot: rules may be missing after a reboot
 function methods.sync()
+	-- 启动路径会调用 sync:这里是唯一允许补写 addnhosts 并重启 dnsmasq 的地方
+	pcall(methods.ensure_dnsmasq)
 	local state = load_state()
 	local ips = load_ipstate()
 	if next(state) == nil and next(ips) == nil then
@@ -4379,6 +4413,37 @@ function save_json_map(file, v)
 	f:close()
 	os.rename(tmp, file)
 	return true
+end
+
+-- 读-改-写必须串行:watcher 的 ubus ipadd 与 tick 的 feed 合并会同时
+-- 写 blocked_ips.json,原子改名只防半截文件,防不住后写覆盖先写。
+-- 用一个锁目录(创建成功即持有,失败即被占)做互斥,不需要外部命令;
+-- 持锁超过 5 秒视为陈旧并强制夺回,避免崩溃后永久卡死。
+function lock_acquire(file, timeout)
+	local lock = file .. ".lock"
+	local deadline = os.time() + (timeout or 5)
+	while true do
+		if fs.mkdir(lock) then return true end
+		-- 陈旧锁:持有者早已不在
+		local st = fs.stat(lock, "mtime")
+		if st and (os.time() - st) > 10 then fs.rmdir(lock) end
+		if os.time() >= deadline then return false end
+		sys.call("sleep 0.05")
+	end
+end
+
+function lock_release(file)
+	fs.rmdir(file .. ".lock")
+end
+
+-- 带锁的读改写。所有对 blocked_ips.json 的变更都走这里。
+function update_ipstate(fn)
+	local ok_ = lock_acquire(IPSTATE_FILE)
+	local d = load_ipstate()
+	fn(d)
+	local r = save_ipstate(d)
+	if ok_ then lock_release(IPSTATE_FILE) end
+	return r
 end
 
 local function load_groups()
@@ -4826,7 +4891,8 @@ function methods.selfcheck()
 	end
 
 	-- 1) watcher process
-	local pid = (read_all("/var/run/languard-watch.pid") or ""):gsub("%s", "")
+	-- pidfile 现在是 "watcher logread" 两段,取第一段
+	local pid = ((read_all("/var/run/languard-watch.pid") or ""):match("^%s*(%d+)") or "")
 	local alive = pid ~= "" and sys.call("kill -0 " .. pid .. " >/dev/null 2>&1") == 0
 	add("watcher", alive,
 		alive and ("running (pid " .. pid .. ")") or "not running",
@@ -5131,6 +5197,7 @@ if arg[1] == "list" then
 		domaintoggle = { on_ = "" },
 		exportconfig = {},
 		exportfile  = {},
+		ensure_dnsmasq = {},
 		importfile  = { name = "" },
 		importconfig = { payload = "" },
 		probe       = {},
@@ -5379,6 +5446,8 @@ elseif arg[1] == "call" then
 		res = methods.domaindel(req.name)
 	elseif name == "domaintoggle" then
 		res = methods.domaintoggle(req.on_)
+	elseif name == "ensure_dnsmasq" then
+		res = methods.ensure_dnsmasq()
 	elseif name == "exportfile" then
 		res = methods.exportfile()
 	elseif name == "importfile" then
