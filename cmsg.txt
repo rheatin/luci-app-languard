@@ -1,9 +1,12 @@
-refactor: 拆出 notify.lua
+refactor: 拆出 domains.lua
 
-通知通道(telegram / bark / webhook)、事件分发、通道增删改由
-languard/notify.lua 独占。原来主文件里 notify_event 被 6 处调用,
-定义却夹在别处;现在只有一个出口。
+域名黑名单的写入、hosts 文件生成、dnsmasq 登记、命中查询全部移入
+languard/domains.lua。它拥有 DOMAIN_FILE 与 DOMAIN_HOSTS 两个文件。
 
-主文件 4907 → 4758 行,共 7 个模块。
+启动期补登记(addnhosts + 重启一次 dnsmasq)与运行期刷新(只发 HUP)
+在同一个模块里,两者的区别第一次有了明确归属。
 
-实测:notifyget/notifyevents 正常,12 个 ubus 接口全部通过,健康 OK。
+主文件 4771 → 4629 行,共 8 个模块。
+
+实测:域名增删生效(hosts 文件同步写入 2 行:IPv4 + IPv6 各一条),
+删除后恢复;健康 OK,list/domainlist/domainhits/notifyget/appstats 正常。
