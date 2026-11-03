@@ -376,7 +376,8 @@ var STYLE = `
 .cb-dash-row .cb-k { min-width: 10rem; color: var(--text-muted); }
 .cb-dash-row .cb-v { font-weight: 600; font-family: var(--font-mono); font-size: .82rem; }
 .cb-fail-list { margin-top: .6rem; display: grid; gap: .3rem; }
-.cb-fail-item { font-size: .8rem; color: var(--danger); }
+.cb-fail-item { font-size: .8rem; color: var(--danger); display: flex; align-items: center;
+	justify-content: space-between; gap: .5rem; }
 
 /* ---- trend chart ---- */
 .cb-trend { display: flex; gap: 2px; align-items: flex-end; height: 4.5rem;
@@ -924,8 +925,20 @@ return view.extend({
 					d.health_ok ? _('all checks passed') : _('attention needed')));
 				if (!d.health_ok && (d.health_failing || []).length) {
 					var list = E('div', { 'class': 'cb-fail-list' });
+					// 每一项失败都给一个能直接点的恢复动作,不必再切到健康页
+					var FIXABLE = { nftset: 1, rulesfile: 1, nfthook: 1,
+					                watcher: 1, appstats: 1, logread: 1, luci_realip: 1 };
 					d.health_failing.forEach(function (c) {
-						list.appendChild(E('div', { 'class': 'cb-fail-item' }, '✕ ' + (c.detail || c.id)));
+						list.appendChild(E('div', { 'class': 'cb-fail-item' }, [
+							E('span', {}, '✕ ' + (c.detail || c.id)),
+							FIXABLE[c.id]
+								? E('button', {
+									'class': 'cb-btn cb-btn-primary',
+									'style': 'font-size:.72rem;padding:.05rem .5rem;margin-left:.5rem;white-space:nowrap',
+									'click': function (ev) { self.handleFix(ev, c.id); }
+								}, _('Fix'))
+								: ''
+						]));
 					});
 					wrap.appendChild(list);
 				}
