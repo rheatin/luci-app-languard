@@ -1,23 +1,10 @@
-fix: 复审 #2 的 6 个 HIGH 与 2 个 MEDIUM
+fix: common.js 必须是构造函数而不是裸对象
 
-H1 feeds 的 IPSTATE_FILE 没注入 → IP 类订阅刷新时 lock_acquire(nil) 崩,
-   而 tick 没有 pcall 包住 feed 步骤,到期的源会让整轮 tick 失败。
-H2 geosite 路径用到的 pb_field 未注入。
-H3 feeds 回调 methods.feedrefresh,methods 是主文件的 local。
-H4 feeddel 末尾裸调 reload_firewall,删完源和 IP 之后才崩。
-H5 apps.lua 调 sys.call 却没有 require luci.sys。
-H6 apps.lua 裸调 trim / sig_usable,appimport、sigadd、sample_save 崩。
-H7 ipadd 改造成 update_ipstate 后,lamba 外仍引用 st → 手动与自动封禁
-   写进状态、写进规则文件,然后崩在 notify 之前,内核 fast path 丢失。
+LuCI 的 require 要求模块工厂返回函数(baseclass 派生类),返回普通对象会抛
+"factory yields invalid constructor",整个视图加载失败。
 
-M2 render_rules 的逐 IP 计数规则在拆分中丢失(只剩聚合规则),恢复。
-M3 nft.lua 整个模块无人使用,且 setup 闭包捕获了尚未定义的 load_ipstate
-   → 现已真正接线:删除主文件里的重复实现,改为 nftm.* 赋值。
+改为 baseclass.extend({...})。视图侧的用法不变:require 得到的是类实例,
+STYLE 与各 call* 都在原型上。
 
-L1 wladd/wldel 清的是旧的 WL_CACHE 全局,而 wl_has 已改用模块内缓存
-   → 改为 devm.invalidate("wl")。
-
-M1(网段)为误报:lan_prefix 取三段正确返回 192.168.1。
-
-实测:26 个接口全通过;ipadd 后规则文件与内核 set 同时命中;tick 正常;
-白名单增删缓存立即生效;健康 OK。
+注意:common.js 的 URL 带 resource_version 参数,版本没变时浏览器会用缓存,
+升级后需要强制刷新。

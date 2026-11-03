@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 'require rpc';
 
 // 视图共用的底座:所有 RPC 声明、样式表、格式化函数。
@@ -580,7 +581,9 @@ function fmtTime(ts) {
 		' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
-return {
+// LuCI 的模块必须是构造函数:裸对象会触发
+// "factory yields invalid constructor"。
+return baseclass.extend({
 	STYLE: STYLE,
 	callList: callList,
 	callBlock: callBlock,
@@ -671,4 +674,4 @@ return {
 	catMeta: catMeta,
 	typeLabel: typeLabel,
 	fmtTime: fmtTime
-};
+});
