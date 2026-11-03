@@ -107,6 +107,7 @@ load_aliases = devm.load_aliases
 load_panic = devm.load_panic
 
 
+
 local function trim(s)
 	return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
@@ -2663,103 +2664,35 @@ local CONFIG_FILES = {
 	tick = STATE_DIR .. "/tick.json", aliases = ALIAS_FILE,
 	fingerprint = FINGERPRINT_FILE,
 }
+-- 备份与恢复
+sysm = require "languard.system"
+sysm.setup({
+	files = CONFIG_FILES,
+	state_dir = STATE_DIR,
+	notify_file = NOTIFY_FILE,
+	deps = {
+		-- 这些名字此时可能还没赋值,用闭包在调用时解析
+		read_all = function(p) return read_all(p) end,
+		load_json_map = function(a, b) return load_json_map(a, b) end,
+		load_state = function() return load_state() end,
+		render_rules = function(st) return render_rules(st) end,
+		reload_firewall = function() return reload_firewall() end,
+	},
+})
+methods.exportconfig = sysm.exportconfig
+methods.exportfile = sysm.exportfile
+methods.importconfig = sysm.importconfig
+methods.importfile = sysm.importfile
 
-function methods.exportconfig()
-	local out = { success = true, running = true, version = 1, data = {} }
-	for key, path in pairs(CONFIG_FILES) do
-		local raw = read_all(path)
-		if raw then
-			local p = jsonc.parse(raw)
-			if type(p) == "table" then out.data[key] = p end
-		end
-	end
-	return out
-end
 
 -- ubus 消息装不下 2MB 的应用库,所以把备份写到 /www 下再让浏览器下载。
 -- /www 是 uhttpd 的静态根,不经过 LuCI 认证,所以:
 --   * 文件名随机,猜不到
 --   * 令牌一律打码,导入时"***"表示保留原值
 --   * 每次导出先删掉上一份
-function methods.exportfile()
-	local out = methods.exportconfig()
-	local ntf = out.data.notify
-	if type(ntf) == "table" and type(ntf.channels) == "table" then
-		for _, c in ipairs(ntf.channels) do
-			if type(c) == "table" and c.token and c.token ~= "" then c.token = "***" end
-		end
-	end
-	local body = jsonc.stringify(out)
-	-- 清掉旧备份
-	local okd, dir = pcall(fs.dir, "/www")
-	if okd then
-		local f = dir()
-		while f do
-			if f:match("^languard%-backup.*%.json$") then fs.unlink("/www/" .. f) end
-			f = dir()
-		end
-	end
-	math.randomseed(os.time())
-	local name = string.format("languard-backup-%06x%04x.json",
-		math.random(0, 0xffffff), math.random(0, 0xffff))
-	local f = io.open("/www/" .. name, "w")
-	if not f then return err("cannot write /www") end
-	f:write(body) f:close()
-	-- uhttpd 以受限身份读取静态文件,0600 会 403
-	-- nixio 的 mode 参数按八进制字面值解释,传十进制 420 会得到 0420,
-	-- 所以直接交给 chmod 命令
-	pcall(function() sys.call("chmod 644 /www/" .. name) end)
-	return ok({ url = "/" .. name, size = #body,
-	            sections = (function() local n = 0 for _ in pairs(out.data) do n = n + 1 end return n end)() })
-end
 
 -- 恢复走上传路径:/cgi-bin/lg-upload 把文件落在 uploads 下,这里读取并导入
-function methods.importfile(name)
-	name = tostring(name or "languard-backup.json")
-	if not name:match("^[%w%._-]+%.json$") then return err("bad file name") end
-	local path = STATE_DIR .. "/uploads/" .. name
-	local raw = read_all(path)
-	if not raw or raw == "" then return err("upload not found") end
-	local r = methods.importconfig(raw)
-	fs.unlink(path)
-	return r
-end
 
-function methods.importconfig(payload)
-	local p = payload
-	if type(p) == "string" then
-		local ok_, parsed = pcall(jsonc.parse, p)
-		if not ok_ or type(parsed) ~= "table" then return err("invalid JSON") end
-		p = parsed
-	end
-	if type(p) ~= "table" or type(p.data) ~= "table" then return err("missing data") end
-	local n = 0
-	-- 导出的令牌是打码的,恢复时用现有的顶替,别把通配符写进去
-	local cur = p.data.notify
-	if type(cur) == "table" and type(cur.channels) == "table" then
-		local live = load_json_map(NOTIFY_FILE, function() return { channels = {} } end)
-		local byid = {}
-		for _, c in ipairs(live.channels or {}) do byid[tostring(c.id)] = c end
-		for _, c in ipairs(cur.channels) do
-			if type(c) == "table" and c.token == "***" then
-				local o = byid[tostring(c.id)]
-				c.token = (o and o.token) or nil
-			end
-		end
-	end
-	for key, path in pairs(CONFIG_FILES) do
-		local v = p.data[key]
-		if type(v) == "table" then
-			local o = jsonc.stringify(v)
-			if o == "[]" then o = "{}" end
-			local f = io.open(path, "w")
-			if f then f:write(o) f:close() n = n + 1 end
-		end
-	end
-	render_rules(load_state())
-	reload_firewall()
-	return ok({ imported = n })
-end
 
 
 function render_rules(state)

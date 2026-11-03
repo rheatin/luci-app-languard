@@ -1,16 +1,11 @@
-refactor: 拆出 devices.lua,设备状态收归一处
+refactor: 拆出 system.lua,备份恢复独立
 
-九个设备状态文件原本散在 5300 行里, load/save 各写一遍。现在集中在
-languard/devices.lua,按文件分族:
+导出/导入原本混在方法表里,还带着 2MB 应用库的具体文件清单。现在清单由
+调用方注入,模块自己不认识任何状态文件:
 
-  blocked.json  names.json  known_devices.json  whitelist.json
-  groups.json   ports.json  schedule.json       aliases.json  panic.json
+  exportconfig / exportfile   打码令牌、随机文件名、清旧备份、chmod
+  importconfig / importfile   *** 保留原令牌、逐段写回、重载规则
 
-每个函数族只读自己那份文件,白名单缓存也在模块内。主文件以全局名挂回,
-调用点未改。
+依赖用闭包延迟解析 —— 挂载时 read_all 还没赋值,直接传会拿到 nil。
 
-顺带修掉一个遮蔽:文件中段还留着一句 local load_ports,把全局赋值遮蔽成
-nil,导致 render_rules 和端口相关接口全部报 "attempt to call upvalue"。
-
-实测:健康 OK,list/wllist/grouplist/portlist/schedlist/knownlist/
-panicstate/ipflush 全部正常返回,设备 50 台,已知设备 56 条。
+实测:导出 19 段 2612761 字节,下载 200,导入回 19 段,设备 50 台。
