@@ -93,6 +93,8 @@ var callFeedRefresh = rpc.declare({ object: 'luci.languard', method: 'feedrefres
 var callPortPresets = rpc.declare({ object: 'luci.languard', method: 'portpresets' });
 var callPortTemplate = rpc.declare({ object: 'luci.languard', method: 'porttemplate', params: ['macs', 'preset'] });
 var callExport = rpc.declare({ object: 'luci.languard', method: 'exportconfig' });
+var callExportFile = rpc.declare({ object: 'luci.languard', method: 'exportfile' });
+var callImportFile = rpc.declare({ object: 'luci.languard', method: 'importfile', params: [ 'name' ] });
 var callImport = rpc.declare({ object: 'luci.languard', method: 'importconfig', params: ['payload'] });
 
 var callGroupList = rpc.declare({ object: 'luci.languard', method: 'grouplist' });
@@ -1705,13 +1707,42 @@ return view.extend({
 
 	handleExport: function (ev) {
 		var btn = ev.currentTarget; btn.disabled = true;
-		return callExport().then(function (res) {
-			var ta = document.getElementById('cb-backup-text');
-			if (ta) ta.value = JSON.stringify(res, null, 1);
-			ui.addNotification(null, E('p', {}, _('Backup written to the box below')), 'info');
+		return callExportFile().then(function (res) {
+			// 应用库有 2MB,ubus 一次传不完:后端写到 /www 下,这里交给浏览器
+			if (!res || res.success === false) throw new Error((res && res.error) || _('Failed'));
+			var d = new Date();
+			var p = function (n) { return (n < 10 ? '0' : '') + n; };
+			var name = 'languard-backup-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate())
+				+ '-' + p(d.getHours()) + p(d.getMinutes()) + '.json';
+			var a = document.createElement('a');
+			a.href = (res.url || '/languard-backup.json') + '?t=' + Date.now();
+			a.download = name;
+			document.body.appendChild(a); a.click();
+			document.body.removeChild(a);
+			ui.addNotification(null, E('p', {},
+				_('Saved') + ' ' + name + ' (' + Math.round((res.size || 0) / 1024) + ' KB, '
+				+ (res.sections || 0) + ' ' + _('sections') + ')'), 'info');
 		}).catch(function (e) {
 			ui.addNotification(null, E('p', {}, e.message || _('Failed')), 'error');
 		}).finally(function () { btn.disabled = false; });
+	},
+
+	handleImportFile: function (ev) {
+		var self = this;
+		var f = ev.target.files && ev.target.files[0];
+		if (!f) return;
+		if (!confirm(_('Replace all lists and rules with this backup?'))) return;
+		fetch('/cgi-bin/lg-upload?name=languard-backup.json', { method: 'POST', body: f })
+			.then(function (r) { if (!r.ok) throw new Error('upload failed'); return callImportFile('languard-backup.json'); })
+			.then(function (res) {
+				if (res && res.success === false) throw new Error(res.error || _('Failed'));
+				ui.addNotification(null, E('p', {},
+					_('Restored') + ' ' + (res.imported || 0) + ' ' + _('sections')), 'info');
+				return Promise.all([ self.refresh(), self.refreshIps(), self.refreshDash() ]);
+			})
+			.catch(function (e) {
+				ui.addNotification(null, E('p', {}, e.message || _('Failed')), 'error');
+			});
 	},
 
 	handleImport: function (ev) {
@@ -2926,10 +2957,18 @@ return view.extend({
 				]),
 				E('div', { 'class': 'cb-card-body' }, [
 					E('div', { 'class': 'cb-card-hint', 'style': 'margin-bottom:.7rem' },
-						_('Exports every list and rule as JSON: blocked devices and addresses, names, schedules, groups, ports, whitelist, feeds and protection settings.')),
+						_('Everything that survives a reflash: block lists, schedules, groups, ports, whitelist, feeds, protection settings, the app library and the addresses it learned. Traffic counters and caches rebuild themselves and are not included.')),
 					E('div', { 'style': 'display:flex;gap:.5rem;flex-wrap:wrap' }, [
 						E('button', { 'class': 'cb-btn cb-btn-primary',
-							'click': function (ev) { self.handleExport(ev); } }, _('Export')),
+							'click': function (ev) { self.handleExport(ev); } }, _('Download backup')),
+						E('label', { 'class': 'cb-btn', 'style': 'cursor:pointer;margin:0' }, [
+							_('Choose file'),
+							E('input', {
+								'type': 'file', 'accept': '.json,application/json',
+								'style': 'display:none',
+								'change': function (ev) { self.handleImportFile(ev); }
+							})
+						]),
 						E('button', { 'class': 'cb-btn',
 							'click': function (ev) { self.handleImport(ev); } }, _('Import'))
 					]),

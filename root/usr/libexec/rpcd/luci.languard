@@ -2703,11 +2703,18 @@ local function refresh_due_feeds(now)
 end
 
 -- ---- configuration export / import -------------------------------------
+-- 换固件时要保住的东西。运行时可重建的(流量账本、假 IP 缓存、登录日志)
+-- 不在这里:它们要么每小时过期,要么启动后自己长回来。
 local CONFIG_FILES = {
 	blocked_ips = IPSTATE_FILE, blocked = STATE_FILE, names = NAME_FILE,
 	schedule = SCHED_FILE, notify = NOTIFY_FILE, groups = GROUPS_FILE,
 	ports = PORTS_FILE, whitelist = WL_FILE, feeds = FEEDS_FILE,
 	auto = AUTOCFG_FILE, trusted_proxies = PROXY_FILE,
+	-- 应用识别库与学到的地址:2MB 的 apps.json 重建不出来,必须带走
+	apps = APPS_FILE, app_ips = APPIPS_FILE, app_qos = QOS_FILE,
+	domains = DOMAIN_FILE, known_devices = KNOWN_FILE, panic = PANIC_FILE,
+	tick = STATE_DIR .. "/tick.json", aliases = ALIAS_FILE,
+	fingerprint = FINGERPRINT_FILE,
 }
 
 function methods.exportconfig()
@@ -2720,6 +2727,31 @@ function methods.exportconfig()
 		end
 	end
 	return out
+end
+
+-- ubus 消息装不下 2MB 的应用库,所以把备份写到 /www 下再让浏览器下载。
+-- 文件名带时间戳,旧的会覆盖,不会堆满 flash。
+function methods.exportfile()
+	local out = methods.exportconfig()
+	local body = jsonc.stringify(out)
+	local name = "languard-backup.json"
+	local f = io.open("/www/" .. name, "w")
+	if not f then return err("cannot write /www") end
+	f:write(body) f:close()
+	return ok({ url = "/" .. name, size = #body,
+	            sections = (function() local n = 0 for _ in pairs(out.data) do n = n + 1 end return n end)() })
+end
+
+-- 恢复走上传路径:/cgi-bin/lg-upload 把文件落在 uploads 下,这里读取并导入
+function methods.importfile(name)
+	name = tostring(name or "languard-backup.json")
+	if not name:match("^[%w%._-]+%.json$") then return err("bad file name") end
+	local path = STATE_DIR .. "/uploads/" .. name
+	local raw = read_all(path)
+	if not raw or raw == "" then return err("upload not found") end
+	local r = methods.importconfig(raw)
+	fs.unlink(path)
+	return r
 end
 
 function methods.importconfig(payload)
@@ -5033,6 +5065,8 @@ if arg[1] == "list" then
 		domaindel   = { name = "" },
 		domaintoggle = { on_ = "" },
 		exportconfig = {},
+		exportfile  = {},
+		importfile  = { name = "" },
 		importconfig = { payload = "" },
 		probe       = {},
 		grouplist    = {},
@@ -5280,6 +5314,10 @@ elseif arg[1] == "call" then
 		res = methods.domaindel(req.name)
 	elseif name == "domaintoggle" then
 		res = methods.domaintoggle(req.on_)
+	elseif name == "exportfile" then
+		res = methods.exportfile()
+	elseif name == "importfile" then
+		res = methods.importfile(req.name)
 	elseif name == "exportconfig" then
 		res = methods.exportconfig()
 	elseif name == "importconfig" then
