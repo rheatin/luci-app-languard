@@ -1947,6 +1947,15 @@ function render_rules(state)
 			lines[#lines + 1] = "\tip6 daddr @blocked_ip6 counter drop comment \"languard-ip6-out\""
 			lines[#lines + 1] = "\tip6 saddr @blocked_ip6 counter drop comment \"languard-ip6-in\""
 		end
+		-- 逐 IP 计数也要在转发链上生成:被封设备的主要流量是上网(forward),
+		-- 只统计 input 会让每个计数器永远接近零,看起来像没生效。
+		for ip, meta in pairs(ips) do
+			if meta.source ~= "feed" then
+				local fam = ip:find(":") and "ip6" or "ip"
+				lines[#lines + 1] = string.format(
+					"\t%s saddr %s counter drop comment \"languard-ip:%s\"", fam, ip, ip)
+			end
+		end
 		lines[#lines + 1] = "}"
 	end
 	lines[#lines + 1] = ""

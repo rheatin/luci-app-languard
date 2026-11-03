@@ -243,7 +243,35 @@ var STYLE = `
 .cb-tab:hover { color: var(--text); background: var(--hover-faint); }
 .cb-tab.active { color: var(--text); border-color: var(--hairline);
 	background: var(--surface); font-weight: 600; }
-.cb-pane { display: none; }
+/* 宽屏居中 + 统一节奏:所有间距走一个变量,避免各处 magic number */
+:root { --gap: .75rem; }
+.cb-pane { display: none; max-width: 72rem; margin-inline: auto; }
+.cb-card + .cb-card { margin-top: var(--gap); }
+
+/* 数值列对齐:字节计数不对齐是目前最明显的"没打磨"感 */
+.cb-table td[style*="text-align:right"], .cb-num { font-variant-numeric: tabular-nums; }
+
+/* 大表更紧凑,小卡保持松快 */
+.cb-dense td { padding-block: .3rem; font-size: .85rem; }
+
+/* 概览主卡:九张卡等权重等于没有入口,第一张放大做视觉落点 */
+.cb-card-hero .cb-num { font-size: 1.9rem; line-height: 1.1; font-weight: 600; }
+
+/* tab 告警点:健康有问题时不用点开就知道 */
+.cb-tab { position: relative; }
+.cb-tab[data-alert]::after {
+	content: ''; position: absolute; top: .3rem; right: .3rem;
+	width: .45rem; height: .45rem; border-radius: 50%; background: var(--danger);
+}
+
+/* 骨架屏:首拉未回时先占位,空表不再像"坏了" */
+.cb-skel { height: .8rem; border-radius: 4px; background: var(--surface-2);
+	animation: cb-pulse 1.2s ease-in-out infinite; }
+@keyframes cb-pulse { 50% { opacity: .45; } }
+
+/* 状态条:请求失败时出现,平时不占位 */
+.cb-strip { margin: 0 0 var(--gap); padding: .4rem .7rem; border-radius: .35rem;
+	background: var(--danger-surface); color: var(--danger); font-size: .8rem; }
 .cb-pane.active { display: block; }
 
 /* ---- ip form ---- */
@@ -531,6 +559,20 @@ var IP_CATS = [
 var APP_FILTER = null;
 var APP_CHIP_CLICK = null;
 
+// 统一的失败上报。空 catch 曾让两个 bug 潜伏数周:一次 RPC 失败被吞掉,
+// 界面只是显示成"没有数据",看起来像后端坏了。
+var _failCount = 0;
+function fail(e) {
+	_failCount++;
+	try { console.warn('languard: request failed', e); } catch (_) {}
+	var bar = document.getElementById('cb-status-strip');
+	if (bar) {
+		bar.hidden = false;
+		bar.textContent = _failCount + ' ' + 'request(s) failed — see console';
+	}
+	return null;
+}
+
 // 视图持有自己的筛选状态,通过这里同步给 appChip;
 // 直接跨模块给变量赋值在严格模式下会抛 ReferenceError。
 function setAppFilter(name, onClick) {
@@ -677,6 +719,7 @@ return baseclass.extend({
 	fmtBytes: fmtBytes,
 	fmtGeo: fmtGeo,
 	setAppFilter: setAppFilter,
+	fail: fail,
 	appChip: appChip,
 	appHue: appHue,
 	catMeta: catMeta,

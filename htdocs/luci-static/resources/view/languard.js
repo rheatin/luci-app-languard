@@ -188,7 +188,7 @@ return view.extend({
 			self.devices = (res && res.devices) || [];
 			self.blockedCount = (res && res.blocked_count) || 0;
 			self.renderTable();
-		}).catch(function () {}).then(function () {
+		}).catch(common.fail).then(function () {
 			self.renderTable();
 		});
 	},
@@ -438,12 +438,17 @@ return view.extend({
 			]))
 		]));
 
-		var healthCard = E('div', { 'class': 'cb-card' }, [
+		var healthCard = E('div', { 'class': 'cb-card cb-card-hero' }, [
 			E('div', { 'class': 'cb-card-head' }, [
 				E('span', { 'class': 'cb-dot' }), E('span', {}, _('Health'))
 			]),
 			E('div', { 'class': 'cb-card-body' }, (function () {
 				var wrap = E('div', {});
+				// tab 红点跟着健康状态走,不用点进设置页才知道有问题
+				(self._alertTabs || []).forEach(function (pair) {
+					if (!d.health_ok) pair[1].setAttribute('data-alert', '1');
+					else pair[1].removeAttribute('data-alert');
+				});
 				wrap.appendChild(E('span', { 'class': 'cb-res ' + (d.health_ok ? 'cb-health-ok' : 'cb-health-bad') },
 					d.health_ok ? _('all checks passed') : _('attention needed')));
 				if (!d.health_ok && (d.health_failing || []).length) {
@@ -639,7 +644,7 @@ return view.extend({
 			self.domainCount = (res && res.count) || 0;
 			self.domainsEnabled = !!(res && res.enabled);
 			self.renderDomains();
-		}).catch(function () {});
+		}).catch(common.fail);
 	},
 
 	renderDomains: function () {
@@ -708,7 +713,7 @@ return view.extend({
 			if (cnt) cnt.textContent = self.apps.length + ' ' + _('apps');
 			var sel = document.getElementById('cb-sig-app');
 			if (sel) delete sel.dataset.filled;
-		}).catch(function () {});
+		}).catch(common.fail);
 	},
 
 	refreshAppStats: function (range) {
@@ -716,7 +721,7 @@ return view.extend({
 		if (typeof range !== 'string') range = self.appRange || 'today';
 		self.appStatsAt = Date.now();
 		self.appRange = range;
-		return Promise.all([ callAppList(), callAppStats({ range: range }) ]).then(function (r) {
+		return Promise.all([ callAppList(), callAppStats(range) ]).then(function (r) {
 			self.apps = (r[0] && r[0].apps) || [];
 			self.appStats = r[1] || {};
 			self.renderAppStats();
@@ -785,6 +790,19 @@ return view.extend({
 		var tbody = document.getElementById('cb-app-tbody');
 		if (!tbody) return;
 		while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+
+		// 首次请求还没回来:先放骨架行,空表不会像坏了
+		if (this.appStatsAt === undefined) {
+			for (var si = 0; si < 3; si++) {
+				tbody.appendChild(E('tr', {}, [
+					E('td', {}, E('span', { 'class': 'cb-skel', 'style': 'width:' + (60 + si * 12) + '%' })),
+					E('td', { 'class': 'cb-hide-sm' }, E('span', { 'class': 'cb-skel', 'style': 'width:3rem' })),
+					E('td', { 'class': 'cb-hide-sm' }),
+					E('td', {}, E('span', { 'class': 'cb-skel', 'style': 'width:4rem;display:inline-block' }))
+				]));
+			}
+			return;
+		}
 
 		var self = this;
 		var list = (this.appStats && this.appStats.apps) || [];
@@ -870,7 +888,7 @@ return view.extend({
 				window.clearInterval(self.sampleTimer);
 				self.sampleTimer = null;
 			}
-		}).catch(function () {});
+		}).catch(common.fail);
 	},
 
 	renderSample: function () {
@@ -951,7 +969,7 @@ return view.extend({
 	handleSampleStop: function (ev) {
 		var self = this;
 		return callSampleStop().then(function () { return self.refreshSample(); })
-			.catch(function () {});
+			.catch(common.fail);
 	},
 
 	refreshQos: function () {
@@ -959,7 +977,7 @@ return view.extend({
 		return callQosList().then(function (res) {
 			self.qos = (res && res.rules) || [];
 			self.renderQos();
-		}).catch(function () {});
+		}).catch(common.fail);
 	},
 
 	renderQos: function () {
@@ -1053,7 +1071,7 @@ return view.extend({
 					E('td', { 'class': 'cb-mono' }, h.ip)
 				]));
 			});
-		}).catch(function () {});
+		}).catch(common.fail);
 	},
 
 	handleDomainLog: function (ev) {
@@ -1103,7 +1121,7 @@ return view.extend({
 			self.sigs = (res && res.sigs) || [];
 			self.sigApp = name;
 			self.renderSigs();
-		}).catch(function () {});
+		}).catch(common.fail);
 	},
 
 	renderSigs: function () {
@@ -1157,7 +1175,7 @@ return view.extend({
 		var btn = ev.currentTarget;
 		btn.disabled = true;
 		return callAppReset().then(function () { return self.refreshAppStats(); })
-			.catch(function () {})
+			.catch(common.fail)
 			.finally(function () { btn.disabled = false; });
 	},
 
@@ -1166,7 +1184,7 @@ return view.extend({
 		return callTrend().then(function (res) {
 			self.trend = res || {};
 			self.renderTrend();
-		}).catch(function () {});
+		}).catch(common.fail);
 	},
 
 	renderTrend: function () {
@@ -1676,7 +1694,7 @@ return view.extend({
 			});
 			self.logs = next;
 			self.renderLogs();
-		}).catch(function () {});
+		}).catch(common.fail);
 	},
 
 	handleFix: function (ev, id) {
@@ -1846,7 +1864,7 @@ return view.extend({
 		return callAutoGet().then(function (res) {
 			self.auto = res || {};
 			self.renderAuto();
-		}).catch(function () {});
+		}).catch(common.fail);
 	},
 
 	handleAutoToggle: function (ev) {
@@ -2018,7 +2036,7 @@ return view.extend({
 					}, '\u00d7')
 				]));
 			});
-		}).catch(function () {});
+		}).catch(common.fail);
 	},
 
 	handleProxyAdd: function (ev) {
@@ -2357,7 +2375,7 @@ return view.extend({
 						'class': 'cb-proxyx', 'title': _('Undo merge'),
 						'click': function () {
 							callDevUnmerge(d.aliases[0]).then(function () { return self.refresh(); })
-								.catch(function () {});
+								.catch(common.fail);
 						}
 					}, '\u00d7')
 				])
@@ -2445,11 +2463,17 @@ return view.extend({
 		});
 
 		var tabBtn = function (name, label) {
-			return E('button', {
+			var btn = E('button', {
 				'class': 'cb-tab' + (name === 'overview' ? ' active' : ''),
 				'id': 'cb-tab-' + name,
 				'click': function () { self.switchTab(name); }
 			}, label);
+			// 健康项失败时给对应 tab 打红点,不用点开就知道
+			if (name === 'overview' || name === 'settings') {
+				self._alertTabs = self._alertTabs || [];
+				self._alertTabs.push([ name, btn ]);
+			}
+			return btn;
 		};
 
 		var autoPane = E('div', {
@@ -3097,6 +3121,7 @@ E('div', { 'class': 'cb-card' }, [
 		]);
 
 		var root = E('div', { 'class': 'cb-wrap' }, [
+			E('div', { 'class': 'cb-strip', 'id': 'cb-status-strip', 'hidden': 'hidden' }),
 			E('style', {}, STYLE),
 			E('h2', {}, _('LAN Guard')),
 			E('div', { 'class': 'cb-tabs' }, [
