@@ -1,1 +1,11 @@
-@-
+*.apk
+*.ipk
+*.tar.gz
+*.tar.zst
+*.sha256
+/out/
+/dist/
+/sdk/
+
+# honk 配置含订阅源与令牌，禁止入库
+config.dae
